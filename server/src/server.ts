@@ -6,6 +6,10 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import pool from './config/db';
+import cookieParser from 'cookie-parser';
+import authRoutes from './routes/authRoutes';
+
+
 
 // Load environment variables
 dotenv.config();
@@ -36,7 +40,8 @@ if (process.env.NODE_ENV === 'development') {
 
 // Parse JSON bodies (for POST/PUT requests)
 app.use(express.json({ limit: '10mb' }));
-
+app.use(cookieParser()); 
+app.use('/api/auth', authRoutes);
 // ======================
 // Basic Routes (for testing)
 // ======================
