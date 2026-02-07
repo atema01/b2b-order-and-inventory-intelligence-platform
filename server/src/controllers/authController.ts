@@ -13,7 +13,7 @@ export const register = async (req: Request, res: Response) => {
     password, 
     name, 
     phone, 
-    role,
+    role_id, // ← Use role_id, not role string
     companyName,
     address,
     creditLimit = 0,
@@ -21,56 +21,61 @@ export const register = async (req: Request, res: Response) => {
   } = req.body;
 
   // Validate required fields
-  if (!email || !password || !name || !role) {
-    return res.status(400).json({ error: 'Email, password, name, and role are required' });
-  }
-
-  if (!['admin', 'staff', 'buyer'].includes(role)) {
-    return res.status(400).json({ error: 'Invalid role' });
+  if (!email || !password || !name || !role_id) {
+    return res.status(400).json({ error: 'Email, password, name, and role_id are required' });
   }
 
   try {
     // Hash password
     const passwordHash = await hashPassword(password);
 
-    // Build dynamic query based on role
+    // Build dynamic query based on role type
     let queryText = '';
     let values: any[] = [];
 
-    if (role === 'buyer') {
+    // Determine if this is a buyer (check role_id)
+    const isBuyer = role_id === 'R-BUYER';
+
+    if (isBuyer) {
       queryText = `
         INSERT INTO users (
-          email, password_hash, role, name, phone, company_name, address,
-          credit_limit, available_credit, payment_terms, join_date
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, CURRENT_DATE)
-        RETURNING id, email, role, name, company_name, status;
+          email, password_hash, name, phone, company_name, address,
+          credit_limit, available_credit, payment_terms, join_date, role_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, CURRENT_DATE, $9)
+        RETURNING id, email, name, company_name, role_id;
       `;
       values = [
-        email, passwordHash, role, name, phone, companyName, address,
-        creditLimit, paymentTerms
+        email, passwordHash, name, phone, companyName, address,
+        creditLimit, paymentTerms, role_id
       ];
     } else {
       // staff or admin
       queryText = `
-        INSERT INTO users (email, password_hash, role, name, phone)
+        INSERT INTO users (email, password_hash, name, phone, role_id)
         VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, email, role, name, status;
+        RETURNING id, email, name, role_id;
       `;
-      values = [email, passwordHash, role, name, phone];
+      values = [email, passwordHash, name, phone, role_id];
     }
 
     const result = await pool.query(queryText, values);
     const newUser = result.rows[0];
+
+    // Fetch role name for response
+    const roleResult = await pool.query(
+      'SELECT name FROM roles WHERE id = $1',
+      [newUser.role_id]
+    );
+    const roleName = roleResult.rows[0]?.name || 'Unknown';
 
     res.status(201).json({
       message: 'User registered successfully',
       user: {
         id: newUser.id,
         email: newUser.email,
-        role: newUser.role,
         name: newUser.name,
-        ...(newUser.company_name && { companyName: newUser.company_name }),
-        status: newUser.status
+        role: roleName,
+        ...(newUser.company_name && { companyName: newUser.company_name })
       }
     });
 
@@ -96,7 +101,7 @@ export const login = async (req: Request, res: Response) => {
 
   try {
     const result = await pool.query(
-      'SELECT id, email, role, password_hash, status FROM users WHERE email = $1',
+      'SELECT id, email, role_id, password_hash, status FROM users WHERE email = $1',
       [email]
     );
 
@@ -115,22 +120,29 @@ export const login = async (req: Request, res: Response) => {
     }
 
     // Generate JWT
-    const token = generateToken(user.id, user.role);
+    const token = generateToken(user.id, user.role_id);
 
-    // Set HttpOnly cookie (secure, not accessible via JS)
+    // Set HttpOnly cookie
     res.cookie('token', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production', // HTTPS only in prod
+      secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
     });
+
+    // Fetch role name for response
+    const roleResult = await pool.query(
+      'SELECT name FROM roles WHERE id = $1',
+      [user.role_id]
+    );
+    const roleName = roleResult.rows[0]?.name || 'Unknown';
 
     res.json({
       message: 'Login successful',
       user: {
         id: user.id,
         email: user.email,
-        role: user.role
+        role: roleName
       }
     });
 
@@ -142,41 +154,59 @@ export const login = async (req: Request, res: Response) => {
 
 /**
  * GET /api/auth/me
- * Returns current user info (used on app load to hydrate context)
+ * Returns current user info with resolved permissions
  */
 export const getMe = async (req: Request, res: Response) => {
-  // Middleware will attach user to req
   const userId = (req as any).user.userId;
 
   try {
-    const result = await pool.query(
-      `SELECT id, email, role, name, phone, company_name, credit_limit, 
-              available_credit, outstanding_balance, tier, join_date
-       FROM users WHERE id = $1`,
+    // Fetch user + role
+    const userResult = await pool.query(
+      `SELECT u.id, u.email, u.name, u.role_id, u.company_name, u.tier,
+              r.name AS role_name
+       FROM users u
+       LEFT JOIN roles r ON u.role_id = r.id
+       WHERE u.id = $1`,
       [userId]
     );
 
-    if (result.rows.length === 0) {
+    if (userResult.rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const user = result.rows[0];
-    res.json({
+    const user = userResult.rows[0];
+
+    // Fetch permissions for this role
+    let permissions: Record<string, boolean> = {};
+    if (user.role_id) {
+      const permResult = await pool.query(
+        `SELECT p.name
+         FROM role_permissions rp
+         JOIN permissions p ON rp.permission_id = p.id
+         WHERE rp.role_id = $1`,
+        [user.role_id]
+      );
+      permissions = permResult.rows.reduce((acc, p) => {
+        acc[p.name] = true;
+        return acc;
+      }, {} as Record<string, boolean>);
+    }
+
+    // Build response matching your frontend's expected shape
+    const response = {
       id: user.id,
       email: user.email,
-      role: user.role,
       name: user.name,
-      phone: user.phone,
-      ...(user.role === 'buyer' && {
+      role: user.role_name || 'Unknown',
+      permissions,
+      // Buyer-specific fields
+      ...(user.role_name === 'Buyer' && {
         companyName: user.company_name,
-        creditLimit: user.credit_limit,
-        availableCredit: user.available_credit,
-        outstandingBalance: user.outstanding_balance,
-        tier: user.tier,
-        joinDate: user.join_date
+        tier: user.tier
       })
-    });
+    };
 
+    res.json(response);
   } catch (err) {
     console.error('Get me error:', err);
     res.status(500).json({ error: 'Internal server error' });

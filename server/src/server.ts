@@ -8,7 +8,11 @@ import dotenv from 'dotenv';
 import pool from './config/db';
 import cookieParser from 'cookie-parser';
 import authRoutes from './routes/authRoutes';
-
+import productRoutes from './routes/productRoutes';
+import orderRoutes from './routes/orderRoutes';
+import buyerRoutes from './routes/buyerRoutes';
+import categoryRoutes from './routes/categoryRoutes';
+import settingRoutes from './routes/settingRoutes';
 
 
 // Load environment variables
@@ -28,7 +32,7 @@ app.use(helmet());
 // Enable CORS: Allows your React frontend (on :5173) to call this backend
 app.use(cors({
   origin: process.env.NODE_ENV === 'development' 
-    ? 'http://localhost:5173' // Vite default
+    ? 'http://localhost:3000' // Vite default
     : 'https://yourdomain.com', // Later: your production domain
   credentials: true, // Needed if using cookies (we will)
 }));
@@ -42,6 +46,15 @@ if (process.env.NODE_ENV === 'development') {
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser()); 
 app.use('/api/auth', authRoutes);
+app.use('/api/products', productRoutes);
+app.use('/api/orders', orderRoutes);
+app.use('/api/buyers', buyerRoutes);
+app.use('/api/categories', categoryRoutes);
+app.use('/api/settings', settingRoutes);
+// After all routes, before app.listen
+app.use((req, res) => {
+  res.status(404).json({ error: 'Route not found', requested: req.originalUrl });
+});
 // ======================
 // Basic Routes (for testing)
 // ======================
