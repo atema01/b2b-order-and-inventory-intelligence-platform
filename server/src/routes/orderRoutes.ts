@@ -1,11 +1,13 @@
 // server/src/routes/orderRoutes.ts
 import { Router } from 'express';
-import { getAllOrders,createOrder,updateOrder, updateOrderStatus,getOrderById,updateOrderItemPicked} from '../controllers/orderController';
+import { getAllOrders,createOrder,updateOrder, updateOrderStatus,getOrderById,updateOrderItemPicked, getMyDraftOrder, upsertDraftOrder} from '../controllers/orderController';
 import { authenticateToken } from '../middleware/authMiddleware';
 
 const router = Router();
 // In orderRoutes.ts
 router.patch('/:id/status', authenticateToken, updateOrderStatus);
+router.get('/draft', authenticateToken, getMyDraftOrder);
+router.put('/draft', authenticateToken, upsertDraftOrder);
 router.post('/', authenticateToken, createOrder);
 router.put('/:id', authenticateToken, updateOrder);
 router.get('/', authenticateToken, getAllOrders);

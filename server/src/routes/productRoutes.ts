@@ -1,6 +1,6 @@
 // src/routes/productRoutes.ts
 import { Router } from 'express';
-import { getProductById,createProduct,getAllProducts,updateProduct,deleteProduct} from '../controllers/productController';
+import { getProductById,createProduct,getAllProducts,updateProduct,deleteProduct,adjustProductStock } from '../controllers/productController';
 import { authenticateToken } from '../middleware/authMiddleware';
 
 const router = Router();
@@ -13,4 +13,5 @@ router.get('/', authenticateToken, getAllProducts);
 router.delete('/:id', authenticateToken, deleteProduct);
 // In productRoutes.ts
 router.put('/:id', authenticateToken, updateProduct);
+router.post('/:id/adjust-stock', authenticateToken, adjustProductStock);
 export default router;

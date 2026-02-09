@@ -1,6 +1,7 @@
 // server/src/controllers/categoryController.ts
 import { Request, Response } from 'express';
 import pool from '../config/db';
+import { logActivity } from '../utils/activityLog';
 
 export const getAllCategories = async (req: Request, res: Response) => {
   try {
@@ -27,6 +28,12 @@ export const createCategory = async (req: Request, res: Response) => {
       [`CAT-${Date.now()}`, name.trim()]
     );
     res.status(201).json(result.rows[0]);
+    await logActivity(
+      req,
+      'Create Category',
+      'Inventory',
+      `Created category ${result.rows[0].id} (${name.trim()}).`
+    );
   } catch (err) {
     console.error('Create category error:', err);
     res.status(500).json({ error: 'Failed to create category' });
@@ -80,6 +87,12 @@ export const updateCategory = async (req: Request, res: Response) => {
       );
 
       res.json(updatedResult.rows[0]);
+      await logActivity(
+        req,
+        'Update Category',
+        'Inventory',
+        `Updated category ${id} to ${newName.trim()}.`
+      );
     } catch (err) {
       await pool.query('ROLLBACK');
       throw err;
@@ -114,6 +127,12 @@ export const deleteCategory = async (req: Request, res: Response) => {
     }
 
     res.json({ message: 'Category deleted successfully' });
+    await logActivity(
+      req,
+      'Delete Category',
+      'Inventory',
+      `Deleted category ${id}.`
+    );
   } catch (err) {
     console.error('Delete category error:', err);
     res.status(500).json({ error: 'Failed to delete category' });

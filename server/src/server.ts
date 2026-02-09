@@ -13,6 +13,15 @@ import orderRoutes from './routes/orderRoutes';
 import buyerRoutes from './routes/buyerRoutes';
 import categoryRoutes from './routes/categoryRoutes';
 import settingRoutes from './routes/settingRoutes';
+import notificationRoutes from './routes/notificationRoutes';
+import systemLogRoutes from './routes/systemLogRoutes';
+import returnRoutes from './routes/returnRoutes';
+import roleRoutes from './routes/roleRoutes';
+import staffRoutes from './routes/staffRoutes';
+import permissionRoutes from './routes/permissionRoutes';
+import creditRoutes from './routes/creditRoutes';
+import paymentRoutes from './routes/paymentRoutes';
+import pricingRoutes from './routes/pricingRoutes';
 
 
 // Load environment variables
@@ -51,6 +60,15 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/buyers', buyerRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/settings', settingRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/system-logs', systemLogRoutes);
+app.use('/api/returns', returnRoutes);
+app.use('/api/roles', roleRoutes);
+app.use('/api/staff', staffRoutes);
+app.use('/api/permissions', permissionRoutes);
+app.use('/api/credits', creditRoutes);
+app.use('/api/payments', paymentRoutes);
+app.use('/api/pricing', pricingRoutes);
 // After all routes, before app.listen
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found', requested: req.originalUrl });

@@ -1,32 +1,34 @@
 // server/src/controllers/buyerController.ts
 import { Request, Response } from 'express';
 import pool from '../config/db';
+import { logActivity } from '../utils/activityLog';
 
 // server/src/controllers/buyerController.ts
 export const getAllBuyers = async (req: Request, res: Response) => {
   try {
     const result = await pool.query(`
       SELECT 
-        id,
-        company_name AS "companyName",
-        name AS "contactPerson",
-        email,
-        phone,
-        address,
-        credit_limit AS "creditLimit",
-        available_credit AS "availableCredit",
-        outstanding_balance AS "outstandingBalance",
-        payment_terms AS "paymentTerms",
-        COALESCE(total_spend, 0) AS "totalSpend",
-        COALESCE(total_orders, 0) AS "totalOrders",
-        COALESCE(tier, 'Silver') AS "tier",
-        COALESCE(discount_rate, 0.05) AS "discountRate",
-        join_date AS "joinDate",
-        COALESCE(avatar, '') AS "avatar",
-        COALESCE(status, 'Active') AS "status"
-      FROM users
-      WHERE role_id = 'R-BUYER'
-      ORDER BY company_name
+        u.id,
+        u.company_name AS "companyName",
+        u.name AS "contactPerson",
+        u.email,
+        u.phone,
+        u.address,
+        u.credit_limit AS "creditLimit",
+        u.available_credit AS "availableCredit",
+        u.outstanding_balance AS "outstandingBalance",
+        u.payment_terms AS "paymentTerms",
+        COALESCE(u.total_spend, 0) AS "totalSpend",
+        COALESCE(u.total_orders, 0) AS "totalOrders",
+        COALESCE(pr.name, '') AS "tier",
+        COALESCE(u.discount_rate, 0.05) AS "discountRate",
+        u.join_date AS "joinDate",
+        COALESCE(u.avatar, '') AS "avatar",
+        COALESCE(u.status, 'Active') AS "status"
+      FROM users u
+      LEFT JOIN pricing_rules pr ON pr.name = u.tier
+      WHERE u.role_id = 'R-BUYER'
+      ORDER BY u.company_name
     `);
     
     res.json(result.rows);
@@ -40,10 +42,20 @@ export const getAllBuyers = async (req: Request, res: Response) => {
 // server/src/controllers/buyerController.ts
 export const getBuyerById = async (req: Request, res: Response) => {
   const { id } = req.params;
+  const currentUser = (req as any).user;
+  const isBuyer = currentUser?.role === 'R-BUYER';
+  if (isBuyer && currentUser?.userId !== id) {
+    return res.status(403).json({ error: 'Insufficient permissions' });
+  }
   
   try {
     const result = await pool.query(
-      'SELECT * FROM users WHERE id = $1 AND role_id = $2',
+      `SELECT 
+         u.*,
+         COALESCE(pr.name, '') AS tier_name
+       FROM users u
+       LEFT JOIN pricing_rules pr ON pr.name = u.tier
+       WHERE u.id = $1 AND u.role_id = $2`,
       [id, 'R-BUYER'] // Make sure you're filtering by buyer role
     );
 
@@ -67,7 +79,7 @@ export const getBuyerById = async (req: Request, res: Response) => {
       paymentTerms: buyer.payment_terms,
       totalSpend: buyer.total_spend || 0,
       totalOrders: buyer.total_orders || 0,
-      tier: buyer.tier || 'Bronze',
+      tier: buyer.tier_name || '',
       discountRate: buyer.discount_rate || 0,
       joinDate: buyer.join_date,
       avatar: buyer.avatar || '',
@@ -84,6 +96,26 @@ export const updateBuyer = async (req: Request, res: Response) => {
   const updates = req.body;
 
   try {
+    if (Object.prototype.hasOwnProperty.call(updates, 'tier')) {
+      const desiredTier = typeof updates.tier === 'string' ? updates.tier.trim() : '';
+      if (!desiredTier) {
+        updates.tier = null;
+        updates.discountRate = 0;
+      } else {
+        const tierResult = await pool.query(
+          'SELECT name, discount_percentage FROM pricing_rules WHERE name = $1',
+          [desiredTier]
+        );
+        if (tierResult.rows.length > 0) {
+          updates.tier = tierResult.rows[0].name;
+          updates.discountRate = Number(tierResult.rows[0].discount_percentage || 0) / 100;
+        } else {
+          updates.tier = null;
+          updates.discountRate = 0;
+        }
+      }
+    }
+
     // Build dynamic query based on provided fields
     const fields = Object.keys(updates);
     if (fields.length === 0) {
@@ -117,6 +149,13 @@ export const updateBuyer = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Buyer not found' });
     }
 
+    await logActivity(
+      req,
+      'Update Buyer',
+      'Users',
+      `Updated buyer ${id}.`
+    );
+
     res.json(result.rows[0]);
   } catch (err) {
     console.error('Update buyer error:', err);
@@ -144,6 +183,13 @@ export const resetBuyerPassword = async (req: Request, res: Response) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Buyer not found' });
     }
+
+    await logActivity(
+      req,
+      'Reset Buyer Password',
+      'Users',
+      `Password reset for buyer ${id}.`
+    );
 
     res.json({ message: 'Password reset successfully' });
   } catch (err) {

@@ -2,6 +2,7 @@
 import { Request, Response } from 'express';
 import pool from '../config/db';
 import { hashPassword, comparePassword, generateToken } from '../utils/auth';
+import { logActivity } from '../utils/activityLog';
 
 /**
  * POST /api/auth/register
@@ -17,7 +18,8 @@ export const register = async (req: Request, res: Response) => {
     companyName,
     address,
     creditLimit = 0,
-    paymentTerms = 'Net 30'
+    paymentTerms = 'Net 30',
+    tier = 'Bronze'
   } = req.body;
 
   // Validate required fields
@@ -37,16 +39,31 @@ export const register = async (req: Request, res: Response) => {
     const isBuyer = role_id === 'R-BUYER';
 
     if (isBuyer) {
+      let discountRate = 0;
+      let tierName: string | null = null;
+      const desiredTier = typeof tier === 'string' ? tier.trim() : '';
+
+      if (desiredTier) {
+        const tierResult = await pool.query(
+          'SELECT name, discount_percentage FROM pricing_rules WHERE name = $1',
+          [desiredTier]
+        );
+        if (tierResult.rows.length > 0) {
+          tierName = tierResult.rows[0].name;
+          discountRate = Number(tierResult.rows[0].discount_percentage || 0) / 100;
+        }
+      }
+
       queryText = `
         INSERT INTO users (
           email, password_hash, name, phone, company_name, address,
-          credit_limit, available_credit, payment_terms, join_date, role_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, CURRENT_DATE, $9)
+          credit_limit, available_credit, payment_terms, tier, discount_rate, join_date, role_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9, $10, CURRENT_DATE, $11)
         RETURNING id, email, name, company_name, role_id;
       `;
       values = [
         email, passwordHash, name, phone, companyName, address,
-        creditLimit, paymentTerms, role_id
+        creditLimit, paymentTerms, tierName, discountRate, role_id
       ];
     } else {
       // staff or admin
@@ -60,6 +77,22 @@ export const register = async (req: Request, res: Response) => {
 
     const result = await pool.query(queryText, values);
     const newUser = result.rows[0];
+
+    if (isBuyer) {
+      await logActivity(
+        req,
+        'Register Buyer',
+        'Users',
+        `Registered buyer ${companyName || name} (${newUser.id}).`
+      );
+    } else {
+      await logActivity(
+        req,
+        'Register Staff',
+        'Users',
+        `Registered staff ${name} (${newUser.id}).`
+      );
+    }
 
     // Fetch role name for response
     const roleResult = await pool.query(
@@ -146,6 +179,13 @@ export const login = async (req: Request, res: Response) => {
       }
     });
 
+    await logActivity(
+      req,
+      'Login',
+      'Users',
+      `User ${user.email} logged in.`
+    );
+
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -162,10 +202,12 @@ export const getMe = async (req: Request, res: Response) => {
   try {
     // Fetch user + role
     const userResult = await pool.query(
-      `SELECT u.id, u.email, u.name, u.role_id, u.company_name, u.tier,
-              r.name AS role_name
+      `SELECT u.id, u.email, u.name, u.phone, u.role_id, u.company_name, u.tier,
+              r.name AS role_name,
+              COALESCE(pr.name, '') AS tier_name
        FROM users u
        LEFT JOIN roles r ON u.role_id = r.id
+       LEFT JOIN pricing_rules pr ON pr.name = u.tier
        WHERE u.id = $1`,
       [userId]
     );
@@ -197,12 +239,13 @@ export const getMe = async (req: Request, res: Response) => {
       id: user.id,
       email: user.email,
       name: user.name,
+      phone: user.phone,
       role: user.role_name || 'Unknown',
       permissions,
       // Buyer-specific fields
       ...(user.role_name === 'Buyer' && {
         companyName: user.company_name,
-        tier: user.tier
+        tier: user.tier_name || ''
       })
     };
 
@@ -220,4 +263,112 @@ export const getMe = async (req: Request, res: Response) => {
 export const logout = (req: Request, res: Response) => {
   res.clearCookie('token');
   res.json({ message: 'Logged out successfully' });
+};
+
+/**
+ * POST /api/auth/change-password
+ * Change current user's password
+ */
+export const changePassword = async (req: Request, res: Response) => {
+  const userId = (req as any).user.userId;
+  const { currentPassword, newPassword } = req.body || {};
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: 'Current and new password are required' });
+  }
+
+  try {
+    const result = await pool.query(
+      'SELECT password_hash, email FROM users WHERE id = $1',
+      [userId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const { password_hash, email } = result.rows[0];
+    const isValid = await comparePassword(currentPassword, password_hash);
+    if (!isValid) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+
+    const newHash = await hashPassword(newPassword);
+    await pool.query(
+      'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [newHash, userId]
+    );
+
+    await logActivity(
+      req,
+      'Change Password',
+      'Users',
+      `User ${email} changed password.`
+    );
+
+    res.json({ message: 'Password changed successfully' });
+  } catch (err) {
+    console.error('Change password error:', err);
+    res.status(500).json({ error: 'Failed to change password' });
+  }
+};
+
+/**
+ * PUT /api/auth/me
+ * Update current user's profile
+ */
+export const updateMe = async (req: Request, res: Response) => {
+  const userId = (req as any).user.userId;
+  const { name, email, phone, companyName } = req.body || {};
+
+  if (!name || !email) {
+    return res.status(400).json({ error: 'Name and email are required' });
+  }
+
+  try {
+    const userResult = await pool.query('SELECT role_id FROM users WHERE id = $1', [userId]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const isBuyer = userResult.rows[0].role_id === 'R-BUYER';
+
+    if (isBuyer) {
+      await pool.query(
+        `UPDATE users SET
+           name = $1,
+           email = $2,
+           phone = $3,
+           company_name = $4,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = $5`,
+        [name, email, phone || null, companyName || null, userId]
+      );
+    } else {
+      await pool.query(
+        `UPDATE users SET
+           name = $1,
+           email = $2,
+           phone = $3,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = $4`,
+        [name, email, phone || null, userId]
+      );
+    }
+
+    await logActivity(
+      req,
+      'Update Profile',
+      'Users',
+      `User ${email} updated profile.`
+    );
+
+    return getMe(req, res);
+  } catch (err: any) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'Email already in use' });
+    }
+    console.error('Update profile error:', err);
+    res.status(500).json({ error: 'Failed to update profile' });
+  }
 };
