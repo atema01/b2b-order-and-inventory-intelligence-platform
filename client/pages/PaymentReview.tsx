@@ -11,6 +11,8 @@ const PaymentReview: React.FC = () => {
   const [payment, setPayment] = useState<Payment | null>(null);
   const [order, setOrder] = useState<Order | null>(null);
   const [notes, setNotes] = useState('');
+  const [selectedStatus, setSelectedStatus] = useState<PaymentStatus>(PaymentStatus.PENDING);
+  const [isEditingStatus, setIsEditingStatus] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -40,6 +42,7 @@ const PaymentReview: React.FC = () => {
         if (!isMounted) return;
         setPayment(paymentData);
         setNotes(paymentData?.notes || '');
+        setSelectedStatus((paymentData?.status as PaymentStatus) || PaymentStatus.PENDING);
         setOrder(orderData);
       } catch (err) {
         console.error('Load payment error:', err);
@@ -90,6 +93,11 @@ const PaymentReview: React.FC = () => {
 
   const handleAction = async (status: PaymentStatus) => {
     if (!payment) return;
+    // Rejected and mismatched reviews require explanatory notes for audit clarity.
+    if ((status === PaymentStatus.REJECTED || status === PaymentStatus.MISMATCHED) && !notes.trim()) {
+      alert('Please add review notes before rejecting or marking mismatch.');
+      return;
+    }
     try {
       const res = await fetch(`/api/payments/${payment.id}`, {
         method: 'PATCH',
@@ -108,8 +116,10 @@ const PaymentReview: React.FC = () => {
     }
   };
 
+  const isPendingReview = payment.status === PaymentStatus.PENDING;
+
   return (
-    <div className="p-4 lg:p-8 max-w-6xl mx-auto space-y-8 pb-32">
+    <div className="p-4 lg:p-8 max-w-6xl mx-auto space-y-8 pb-44">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Left: Proof of Payment */}
         <div className="space-y-6">
@@ -166,7 +176,21 @@ const PaymentReview: React.FC = () => {
           </section>
 
           <section className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm space-y-4">
-            <h3 className="text-sm font-black text-slate-800">{t('payments.reviewNotes')}</h3>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-black text-slate-800">{t('payments.reviewNotes')}</h3>
+              {!isPendingReview && isEditingStatus && (
+                <select
+                  value={selectedStatus}
+                  onChange={(e) => setSelectedStatus(e.target.value as PaymentStatus)}
+                  className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2 text-xs font-black text-slate-700 uppercase tracking-widest"
+                >
+                  <option value={PaymentStatus.PENDING}>Pending Review</option>
+                  <option value={PaymentStatus.APPROVED}>Approved</option>
+                  <option value={PaymentStatus.MISMATCHED}>Mismatched</option>
+                  <option value={PaymentStatus.REJECTED}>Rejected</option>
+                </select>
+              )}
+            </div>
             <textarea 
               className="w-full bg-gray-50 border-transparent rounded-2xl p-4 text-sm font-medium focus:ring-primary focus:bg-white transition-all"
               placeholder={t('payments.reviewNotesPlaceholder')}
@@ -178,27 +202,61 @@ const PaymentReview: React.FC = () => {
         </div>
       </div>
 
+      {/* Spacer to keep last content visible above fixed action bar */}
+      <div className="h-28 lg:h-32" aria-hidden="true"></div>
+
       <footer className="fixed bottom-0 left-0 lg:left-64 right-0 bg-white/95 backdrop-blur-md border-t border-gray-200 p-4 z-40">
-        <div className="max-w-6xl mx-auto grid grid-cols-3 gap-4">
-          <button 
-            onClick={() => handleAction(PaymentStatus.REJECTED)}
-            className="py-4 bg-red-50 text-red-600 rounded-2xl font-black hover:bg-red-600 hover:text-white transition-all text-xs uppercase tracking-widest"
-          >
-            {t('payments.reject')}
-          </button>
-          <button 
-            onClick={() => handleAction(PaymentStatus.MISMATCHED)}
-            className="py-4 bg-orange-50 text-orange-600 rounded-2xl font-black hover:bg-orange-600 hover:text-white transition-all text-xs uppercase tracking-widest"
-          >
-            {t('payments.markMismatch')}
-          </button>
-          <button 
-            onClick={() => handleAction(PaymentStatus.APPROVED)}
-            className="py-4 bg-emerald-600 text-white rounded-2xl font-black shadow-xl shadow-emerald-600/20 active:scale-95 transition-all text-xs uppercase tracking-widest"
-          >
-            {t('payments.approve')}
-          </button>
-        </div>
+        {isPendingReview ? (
+          <div className="max-w-6xl mx-auto grid grid-cols-3 gap-4">
+            <button 
+              onClick={() => handleAction(PaymentStatus.REJECTED)}
+              className="py-4 bg-red-50 text-red-600 rounded-2xl font-black hover:bg-red-600 hover:text-white transition-all text-xs uppercase tracking-widest"
+            >
+              {t('payments.reject')}
+            </button>
+            <button 
+              onClick={() => handleAction(PaymentStatus.MISMATCHED)}
+              className="py-4 bg-orange-50 text-orange-600 rounded-2xl font-black hover:bg-orange-600 hover:text-white transition-all text-xs uppercase tracking-widest"
+            >
+              {t('payments.markMismatch')}
+            </button>
+            <button 
+              onClick={() => handleAction(PaymentStatus.APPROVED)}
+              className="py-4 bg-emerald-600 text-white rounded-2xl font-black shadow-xl shadow-emerald-600/20 active:scale-95 transition-all text-xs uppercase tracking-widest"
+            >
+              {t('payments.approve')}
+            </button>
+          </div>
+        ) : (
+          <div className="max-w-6xl mx-auto flex justify-end gap-3">
+            {isEditingStatus ? (
+              <>
+                <button
+                  onClick={() => {
+                    setIsEditingStatus(false);
+                    setSelectedStatus(payment.status as PaymentStatus);
+                  }}
+                  className="px-6 py-3 bg-gray-100 text-slate-700 rounded-2xl font-black text-xs uppercase tracking-widest"
+                >
+                  {t('common.cancel')}
+                </button>
+                <button
+                  onClick={() => handleAction(selectedStatus)}
+                  className="px-6 py-3 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-primary/20"
+                >
+                  Save Status
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => setIsEditingStatus(true)}
+                className="px-6 py-3 bg-primary text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-primary/20"
+              >
+                Edit Status
+              </button>
+            )}
+          </div>
+        )}
       </footer>
     </div>
   );

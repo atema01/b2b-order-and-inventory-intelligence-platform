@@ -1,14 +1,15 @@
 // src/routes/roleRoutes.ts
 import { Router } from 'express';
 import { getAllRoles, getRoleById, createRole, updateRole, deleteRole } from '../controllers/roleController';
-import { authenticateToken } from '../middleware/authMiddleware';
+import { authenticateToken, authorizePermissions } from '../middleware/authMiddleware';
 
 const router = Router();
 
-router.get('/', authenticateToken, getAllRoles);
-router.get('/:id', authenticateToken, getRoleById);
-router.post('/', authenticateToken, createRole);
-router.put('/:id', authenticateToken, updateRole);
-router.delete('/:id', authenticateToken, deleteRole);
+// Role management follows dynamic RBAC via the Roles permission.
+router.get('/', authenticateToken, authorizePermissions('Roles'), getAllRoles);
+router.get('/:id', authenticateToken, authorizePermissions('Roles'), getRoleById);
+router.post('/', authenticateToken, authorizePermissions('Roles'), createRole);
+router.put('/:id', authenticateToken, authorizePermissions('Roles'), updateRole);
+router.delete('/:id', authenticateToken, authorizePermissions('Roles'), deleteRole);
 
 export default router;

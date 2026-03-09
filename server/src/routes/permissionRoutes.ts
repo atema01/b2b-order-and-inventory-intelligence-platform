@@ -1,10 +1,11 @@
 // src/routes/permissionRoutes.ts
 import { Router } from 'express';
 import { getAllPermissions } from '../controllers/permissionController';
-import { authenticateToken } from '../middleware/authMiddleware';
+import { authenticateToken, authorizePermissions } from '../middleware/authMiddleware';
 
 const router = Router();
 
-router.get('/', authenticateToken, getAllPermissions);
+// Permission catalog is used in role management, so gate it with Roles permission.
+router.get('/', authenticateToken, authorizePermissions('Roles'), getAllPermissions);
 
 export default router;

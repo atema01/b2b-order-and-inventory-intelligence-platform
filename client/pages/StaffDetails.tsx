@@ -1,4 +1,4 @@
-
+﻿
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Staff, Role } from '../types';
@@ -12,6 +12,7 @@ const StaffDetails: React.FC = () => {
   const [editForm, setEditForm] = useState<Partial<Staff>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [canLoadRoles, setCanLoadRoles] = useState(true);
 
   // Password Reset State
   const [isResetPwdOpen, setIsResetPwdOpen] = useState(false);
@@ -27,13 +28,17 @@ const StaffDetails: React.FC = () => {
           fetch('/api/roles', { credentials: 'include' }),
           fetch(`/api/staff/${id}`, { credentials: 'include' })
         ]);
-        if (!rolesRes.ok) throw new Error('Failed to fetch roles');
         if (!staffRes.ok) throw new Error('Failed to fetch staff member');
-        const [rolesData, staffData] = await Promise.all([
-          rolesRes.json(),
-          staffRes.json()
-        ]);
-        setRoles(rolesData);
+        // Staff profile is required for this page; role list is optional for role reassignment UI.
+        const staffData = await staffRes.json();
+        if (rolesRes.ok) {
+          const rolesData = await rolesRes.json();
+          setRoles(Array.isArray(rolesData) ? rolesData : []);
+          setCanLoadRoles(true);
+        } else {
+          setRoles([]);
+          setCanLoadRoles(false);
+        }
         setMember(staffData);
         setEditForm({
           ...staffData,
@@ -53,11 +58,12 @@ const StaffDetails: React.FC = () => {
   const handleUpdate = async () => {
     if (!member || !id) return;
     try {
+      const updatedRoleId = canLoadRoles ? (editForm as any).roleId : member.roleId;
       const payload = {
         name: editForm.name,
         email: editForm.email,
         phone: editForm.phone,
-        roleId: (editForm as any).roleId,
+        roleId: updatedRoleId,
         status: editForm.status || member.status
       };
       const res = await fetch(`/api/staff/${id}`, {
@@ -167,7 +173,7 @@ const StaffDetails: React.FC = () => {
   if (!member) return <div className="p-8">Staff member not found.</div>;
 
   return (
-    <div className="p-4 lg:p-8 max-w-5xl mx-auto space-y-8 pb-40">
+    <div className={`p-4 lg:p-10 max-w-5xl mx-auto space-y-8 ${isEditing ? 'pb-96' : 'pb-44'}`}>
       {/* Profile Header */}
       <div className="bg-white rounded-[40px] p-8 lg:p-10 border border-gray-100 shadow-sm relative overflow-hidden">
         <div className={`absolute top-0 right-0 w-32 h-32 opacity-10 blur-3xl rounded-full ${isEditing ? 'bg-amber-500' : 'bg-primary'}`}></div>
@@ -185,7 +191,7 @@ const StaffDetails: React.FC = () => {
                   <span className={`px-3 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-widest ${getRoleColor(member.role)} shadow-lg shadow-black/5`}>
                     {member.role}
                   </span>
-                  <span className="text-xs text-gray-400 font-bold">• Staff ID: {member.id}</span>
+                  <span className="text-xs text-gray-400 font-bold">â€¢ Staff ID: {member.id}</span>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
@@ -238,7 +244,7 @@ const StaffDetails: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 ">
         {/* Profile Info Stack */}
         <div className="lg:col-span-8 space-y-8">
           <section className="bg-white rounded-[32px] p-8 border border-gray-100 shadow-sm space-y-8">
@@ -281,11 +287,17 @@ const StaffDetails: React.FC = () => {
                     className="w-full bg-gray-50 border-transparent rounded-2xl px-5 py-3.5 font-bold text-slate-800 focus:ring-primary focus:bg-white transition-all shadow-inner appearance-none"
                     value={(editForm as any).roleId || ''}
                     onChange={(e) => setEditForm({...editForm, roleId: e.target.value} as any)}
+                    disabled={!canLoadRoles}
                   >
                     {roles.map(r => (
                         <option key={r.id} value={r.id}>{r.name}</option>
                     ))}
                   </select>
+                  {!canLoadRoles && (
+                    <p className="text-[10px] font-bold text-amber-600 uppercase tracking-widest">
+                      Role reassignment unavailable without Roles permission.
+                    </p>
+                  )}
                 </div>
               </div>
             ) : (
@@ -327,23 +339,27 @@ const StaffDetails: React.FC = () => {
 
       {/* Save Button */}
       {isEditing && (
-        <footer className="fixed bottom-0 left-0 lg:left-64 right-0 bg-white/95 backdrop-blur-xl border-t border-gray-100 p-6 z-50 shadow-2xl animate-in slide-in-from-bottom-5">
-          <div className="max-w-5xl mx-auto flex gap-4">
-            <button 
-              onClick={() => setIsEditing(false)}
-              className="flex-1 py-5 bg-gray-50 text-slate-500 rounded-[24px] font-black text-xs uppercase tracking-widest hover:bg-gray-100 transition-all active:scale-95"
-            >
-              Discard Changes
-            </button>
-            <button 
-              onClick={handleUpdate}
-              className="flex-[2] py-5 bg-primary text-white rounded-[24px] font-black text-xs uppercase tracking-widest shadow-2xl shadow-primary/30 hover:bg-primary-hover transition-all active:scale-95 flex items-center justify-center gap-3"
-            >
-              Update Member
-              <span className="material-symbols-outlined text-lg">check_circle</span>
-            </button>
-          </div>
-        </footer>
+        <>
+          {/* Spacer to keep last content visible above fixed action bar */}
+          <div className="h-32 lg:h-36" aria-hidden="true"></div>
+          <footer className="fixed bottom-0 left-0 lg:left-64 right-0 bg-white/95 backdrop-blur-xl border-t border-gray-100 p-6 z-50 shadow-2xl animate-in slide-in-from-bottom-5">
+            <div className="max-w-5xl mx-auto flex gap-4">
+              <button 
+                onClick={() => setIsEditing(false)}
+                className="flex-1 py-5 bg-gray-50 text-slate-500 rounded-[24px] font-black text-xs uppercase tracking-widest hover:bg-gray-100 transition-all active:scale-95"
+              >
+                Discard Changes
+              </button>
+              <button 
+                onClick={handleUpdate}
+                className="flex-[2] py-5 bg-primary text-white rounded-[24px] font-black text-xs uppercase tracking-widest shadow-2xl shadow-primary/30 hover:bg-primary-hover transition-all active:scale-95 flex items-center justify-center gap-3"
+              >
+                Update Member
+                <span className="material-symbols-outlined text-lg">check_circle</span>
+              </button>
+            </div>
+          </footer>
+        </>
       )}
 
       {/* Password Reset Modal */}
@@ -400,3 +416,6 @@ const StaffDetails: React.FC = () => {
 };
 
 export default StaffDetails;
+
+
+

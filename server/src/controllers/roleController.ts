@@ -103,7 +103,7 @@ export const updateRole = async (req: Request, res: Response) => {
 
     const roleResult = await pool.query(
       `UPDATE roles
-       SET name = $1, description = $2, access_level = $3, updated_at = CURRENT_TIMESTAMP
+       SET name = $1, description = $2, access_level = $3
        WHERE id = $4
        RETURNING id`,
       [name, description || '', accessLevel, id]

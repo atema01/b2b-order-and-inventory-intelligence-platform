@@ -19,6 +19,25 @@ const BuyerDashboard: React.FC = () => {
   useEffect(() => {
     let isMounted = true;
 
+    const toBuyerProfile = (me: any): Buyer => ({
+      id: me?.id || user?.id || '',
+      companyName: me?.companyName || 'Buyer Account',
+      contactPerson: me?.name || 'Buyer',
+      email: me?.email || '',
+      phone: me?.phone || '',
+      address: '',
+      creditLimit: 0,
+      availableCredit: 0,
+      outstandingBalance: 0,
+      paymentTerms: '',
+      totalSpend: 0,
+      totalOrders: 0,
+      status: 'Active',
+      tier: me?.tier || 'Bronze',
+      discountRate: 0,
+      joinDate: ''
+    });
+
     const loadBuyerDashboard = async () => {
       if (!user?.id) {
         setIsLoading(false);
@@ -29,17 +48,17 @@ const BuyerDashboard: React.FC = () => {
       setError('');
 
       try {
-        const [buyerRes, ordersRes, productsRes] = await Promise.all([
-          fetch(`/api/buyers/${user.id}`, { credentials: 'include' }),
+        const [meRes, ordersRes, productsRes] = await Promise.all([
+          fetch('/api/auth/me', { credentials: 'include' }),
           fetch('/api/orders', { credentials: 'include' }),
           fetch('/api/products', { credentials: 'include' })
         ]);
 
-        if (!buyerRes.ok) {
+        if (!meRes.ok) {
           throw new Error('Failed to load buyer profile');
         }
 
-        const buyerData = await buyerRes.json();
+        const meData = await meRes.json();
         const ordersData = ordersRes.ok ? await ordersRes.json() : [];
         const productsData = productsRes.ok ? await productsRes.json() : [];
 
@@ -48,7 +67,7 @@ const BuyerDashboard: React.FC = () => {
 
         if (!isMounted) return;
 
-        setBuyer(buyerData);
+        setBuyer(toBuyerProfile(meData));
         setOrders(ordersArray.filter((o: Order) => o.buyerId === user.id));
         setProducts(productsArray);
       } catch (err) {

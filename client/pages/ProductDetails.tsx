@@ -177,7 +177,7 @@ const handleSave = async () => {
   const totalStock = storageLocations.reduce((acc, loc) => acc + (product.stock[loc.id as StorageLocationId] || 0), 0);
 
   return (
-    <div className="p-4 lg:p-8 max-w-5xl mx-auto pb-40 lg:pb-32">
+    <div className="p-4 lg:p-8 max-w-5xl mx-auto pb-44 lg:pb-44">
       <input 
         type="file" 
         ref={fileInputRef} 

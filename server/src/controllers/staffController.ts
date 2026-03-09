@@ -2,6 +2,7 @@
 import { Request, Response } from 'express';
 import pool from '../config/db';
 import { logActivity } from '../utils/activityLog';
+import { hashPassword } from '../utils/auth';
 
 export const getAllStaff = async (_req: Request, res: Response) => {
   try {
@@ -126,9 +127,12 @@ export const resetStaffPassword = async (req: Request, res: Response) => {
   }
 
   try {
+    // Always hash passwords before persisting to protect credentials at rest.
+    const hashedPassword = await hashPassword(newPassword);
+
     const result = await pool.query(
-      'UPDATE users SET password_hash = $1 WHERE id = $2 RETURNING id',
-      [newPassword, id]
+      'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id',
+      [hashedPassword, id]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Staff member not found' });

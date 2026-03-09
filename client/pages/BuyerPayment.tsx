@@ -138,7 +138,7 @@ const BuyerPayment: React.FC = () => {
   const remaining = order.total - (order.amountPaid || 0);
 
   return (
-    <div className="p-4 lg:p-8 max-w-2xl mx-auto space-y-8 pb-32">
+    <div className="p-4 lg:p-8 max-w-2xl mx-auto space-y-8 pb-44">
       {/* Header */}
       <div className="flex items-center gap-4">
         <button 

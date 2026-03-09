@@ -18,6 +18,10 @@ const Dashboard: React.FC = () => {
 
   // Extract permissions and current user from auth context
   const permissions = user?.permissions || {};
+  const canViewReports = Boolean(permissions['Reports']);
+  const canViewProducts = Boolean(permissions['Products']);
+  const canViewOrders = Boolean(permissions['Orders']);
+  const canViewBuyers = Boolean(permissions['Buyers']);
   const currentUser = user as Staff | null;
 
   const normalizeStatus = (value: any): OrderStatus => {
@@ -45,33 +49,60 @@ const Dashboard: React.FC = () => {
     return map[value] || OrderStatus.PENDING;
   };
 
+  // Resolve buyer label from embedded order fields first, then buyers lookup.
+  const getBuyerLabel = (order: any): string => {
+    return (
+      order?.buyerCompanyName ||
+      order?.buyerName ||
+      order?.companyName ||
+      order?.buyer?.companyName ||
+      order?.buyer?.name ||
+      buyers.find(b => b.id === order?.buyerId)?.companyName ||
+      'Unknown Buyer'
+    );
+  };
+
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        // Fetch all required data in parallel
-        const [ordersRes, productsRes, buyersRes] = await Promise.all([
-          fetch('/api/orders', { credentials: 'include' }),
-          fetch('/api/products', { credentials: 'include' }),
-          fetch('/api/buyers', { credentials: 'include' }),
-        ]);
+        // Load only datasets required by the sections this user can see.
+        const needsOrders = canViewOrders || canViewReports;
+        const needsProducts = canViewProducts || canViewReports;
+        const needsBuyers = canViewOrders && canViewBuyers;
 
-        // Check if any request failed
-        if (!ordersRes.ok) throw new Error('Failed to fetch orders');
-        if (!productsRes.ok) throw new Error('Failed to fetch products');
-        if (!buyersRes.ok) throw new Error('Failed to fetch buyers');
+        if (needsOrders) {
+          const ordersRes = await fetch('/api/orders', { credentials: 'include' });
+          if (!ordersRes.ok) throw new Error('Failed to fetch orders');
+          const ordersData = await ordersRes.json();
+          setOrders(ordersData.map((o: any) => ({ ...o, status: normalizeStatus(o.status) })));
+        } else {
+          setOrders([]);
+        }
 
-        const [ordersData, productsData, buyersData] = await Promise.all([
-          ordersRes.json(),
-          productsRes.json(),
-          buyersRes.json(),
-        ]);
+        if (needsProducts) {
+          const productsRes = await fetch('/api/products', { credentials: 'include' });
+          if (!productsRes.ok) throw new Error('Failed to fetch products');
+          const productsData = await productsRes.json();
+          setProducts(productsData);
+        } else {
+          setProducts([]);
+        }
 
-        setOrders(ordersData.map((o: any) => ({ ...o, status: normalizeStatus(o.status) })));
-        setProducts(productsData);
-        setBuyers(buyersData);
+        if (needsBuyers) {
+          const buyersRes = await fetch('/api/buyers', { credentials: 'include' });
+          if (buyersRes.ok) {
+            const buyersData = await buyersRes.json();
+            setBuyers(Array.isArray(buyersData) ? buyersData : []);
+          } else {
+            // Buyers list is optional for dashboard order cards.
+            setBuyers([]);
+          }
+        } else {
+          setBuyers([]);
+        }
       } catch (err) {
         console.error('Dashboard data fetch error:', err);
         setError(err instanceof Error ? err.message : 'An unexpected error occurred');
@@ -81,9 +112,10 @@ const Dashboard: React.FC = () => {
     };
 
     fetchData();
-  }, []);
+  }, [canViewOrders, canViewProducts, canViewReports, canViewBuyers]);
 
   useEffect(() => {
+    if (!canViewProducts) return;
     let active = true;
     fetchStorageLocations()
       .then((locations) => {
@@ -91,7 +123,7 @@ const Dashboard: React.FC = () => {
       })
       .catch(() => {});
     return () => { active = false; };
-  }, []);
+  }, [canViewProducts]);
 
   // Loading state
   if (loading) {
@@ -205,7 +237,7 @@ const Dashboard: React.FC = () => {
       </div>
 
       {/* Stats Grid - Controlled by 'Reports' Permission */}
-      {permissions['Reports'] && (
+      {canViewReports && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
           {stats.map((stat, i) => (
             <div key={i} className="bg-white p-4 lg:p-6 rounded-2xl lg:rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-all">
@@ -221,7 +253,7 @@ const Dashboard: React.FC = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
         {/* Left Column: Alerts & Locations - Controlled by 'Products' Permission */}
-        {permissions['Products'] && (
+        {canViewProducts && (
           <div className="lg:col-span-4 space-y-6 lg:space-y-8">
             <div className={`rounded-3xl p-5 lg:p-6 relative overflow-hidden group border ${lowStockCount > 0 ? 'bg-red-50 border-red-100' : 'bg-green-50 border-green-100'}`}>
               <div className="flex justify-between items-start mb-4">
@@ -289,7 +321,7 @@ const Dashboard: React.FC = () => {
         )}
 
         {/* Right Column: Recent Orders - Controlled by 'Orders' Permission */}
-        {permissions['Orders'] && (
+        {canViewOrders && (
           <div className="lg:col-span-8 bg-white border border-gray-100 rounded-3xl shadow-sm flex flex-col overflow-hidden">
             <div className="p-5 lg:p-6 border-b border-gray-50 flex items-center justify-between">
               <h2 className="text-lg font-black text-slate-800">{t('dash.pulse')}</h2>
@@ -310,14 +342,14 @@ const Dashboard: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-gray-50">
                   {recentOrders.map((order) => {
-                    const buyer = buyers.find(b => b.id === order.buyerId);
+                    const buyerLabel = getBuyerLabel(order);
                     return (
                       <tr key={order.id} className="hover:bg-gray-50 transition-colors group">
                         <td className="px-6 py-5">
                           <Link to={`/orders/${order.id}`} className="font-black text-primary hover:underline">#{order.id.split('-').pop()}</Link>
                         </td>
                         <td className="px-6 py-5">
-                          <span className="font-bold text-slate-800 leading-none">{buyer?.companyName || "Unknown Buyer"}</span>
+                          <span className="font-bold text-slate-800 leading-none">{buyerLabel}</span>
                         </td>
                         <td className="px-6 py-5 font-black text-slate-800">ETB {order.total.toLocaleString()}</td>
                         <td className="px-6 py-5 text-center">
@@ -338,12 +370,12 @@ const Dashboard: React.FC = () => {
             {/* Mobile Card List */}
             <div className="lg:hidden divide-y divide-gray-50">
               {recentOrders.map((order) => {
-                const buyer = buyers.find(b => b.id === order.buyerId);
+                const buyerLabel = getBuyerLabel(order);
                 return (
                   <Link key={order.id} to={`/orders/${order.id}`} className="p-5 flex items-center justify-between hover:bg-gray-50 active:bg-gray-100 transition-all">
                     <div className="space-y-1">
                       <p className="font-black text-primary text-sm">#{order.id.split('-').pop()}</p>
-                      <p className="font-bold text-slate-800 text-base">{buyer?.companyName || "Unknown"}</p>
+                      <p className="font-bold text-slate-800 text-base">{buyerLabel}</p>
                       <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{order.date}</p>
                     </div>
                     <div className="text-right space-y-2">
@@ -361,7 +393,7 @@ const Dashboard: React.FC = () => {
       </div>
 
       {/* FAB (Now visible on Desktop too) - Controlled by 'Orders' Permission */}
-      {permissions['Orders'] && (
+      {canViewOrders && (
         <Link 
           to="/orders/create"
           className="fixed bottom-6 right-6 w-16 h-16 bg-primary text-white rounded-full shadow-2xl flex items-center justify-center active:scale-90 transition-all z-40 border-4 border-white group"

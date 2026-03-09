@@ -1,4 +1,4 @@
-
+﻿
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { PricingRule } from '../types';
@@ -237,18 +237,25 @@ const PricingDetails: React.FC = () => {
       </div>
 
       {isEditing && (
-        <footer className="fixed bottom-0 left-0 lg:left-64 right-0 bg-white/95 backdrop-blur-xl border-t border-gray-100 p-6 z-50 shadow-2xl">
-          <div className="max-w-5xl mx-auto flex gap-4">
-            <button onClick={() => setIsEditing(false)} className="flex-1 py-5 bg-gray-50 text-slate-500 rounded-[24px] font-black text-xs uppercase tracking-widest hover:bg-gray-100 transition-all">Discard</button>
-            <button onClick={handleUpdate} className="flex-[2] py-5 bg-primary text-white rounded-[24px] font-black text-xs uppercase tracking-widest shadow-2xl shadow-primary/30 hover:bg-primary-hover transition-all flex items-center justify-center gap-3">
-              Update Strategy
-              <span className="material-symbols-outlined text-lg">check_circle</span>
-            </button>
-          </div>
-        </footer>
+        <>
+          {/* Spacer to keep last content visible above fixed action bar */}
+          <div className="h-32 lg:h-36" aria-hidden="true"></div>
+          <footer className="fixed bottom-0 left-0 lg:left-64 right-0 bg-white/95 backdrop-blur-xl border-t border-gray-100 p-6 z-50 shadow-2xl">
+            <div className="max-w-5xl mx-auto flex gap-4">
+              <button onClick={() => setIsEditing(false)} className="flex-1 py-5 bg-gray-50 text-slate-500 rounded-[24px] font-black text-xs uppercase tracking-widest hover:bg-gray-100 transition-all">Discard</button>
+              <button onClick={handleUpdate} className="flex-[2] py-5 bg-primary text-white rounded-[24px] font-black text-xs uppercase tracking-widest shadow-2xl shadow-primary/30 hover:bg-primary-hover transition-all flex items-center justify-center gap-3">
+                Update Strategy
+                <span className="material-symbols-outlined text-lg">check_circle</span>
+              </button>
+            </div>
+          </footer>
+        </>
       )}
     </div>
   );
 };
 
 export default PricingDetails;
+
+
+

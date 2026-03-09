@@ -65,7 +65,14 @@ const BuyerNotifications: React.FC = () => {
     if (notif.type === 'Order' && notif.relatedId) {
       navigate(`/orders/${notif.relatedId}`);
     } else if (notif.type === 'Payment') {
-      navigate('/credit');
+      // Payment/Credit notifications route by related entity type.
+      if (notif.relatedId?.startsWith('ORD-')) {
+        navigate(`/orders/${notif.relatedId}`);
+      } else if (notif.relatedId?.startsWith('CR-')) {
+        navigate('/credit');
+      } else {
+        navigate('/orders');
+      }
     }
   };
 

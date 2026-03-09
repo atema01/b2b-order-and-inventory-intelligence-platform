@@ -11,12 +11,7 @@ import {
   getBulkRuleById,
   createBulkRule,
   updateBulkRule,
-  deleteBulkRule,
-  getAllMarginRules,
-  getMarginRuleById,
-  createMarginRule,
-  updateMarginRule,
-  deleteMarginRule
+  deleteBulkRule
 } from '../controllers/pricingController';
 
 const router = Router();
@@ -34,12 +29,5 @@ router.get('/bulk/:id', authenticateToken, getBulkRuleById);
 router.post('/bulk', authenticateToken, createBulkRule);
 router.put('/bulk/:id', authenticateToken, updateBulkRule);
 router.delete('/bulk/:id', authenticateToken, deleteBulkRule);
-
-// Margin constraints
-router.get('/margin', authenticateToken, getAllMarginRules);
-router.get('/margin/:id', authenticateToken, getMarginRuleById);
-router.post('/margin', authenticateToken, createMarginRule);
-router.put('/margin/:id', authenticateToken, updateMarginRule);
-router.delete('/margin/:id', authenticateToken, deleteMarginRule);
 
 export default router;

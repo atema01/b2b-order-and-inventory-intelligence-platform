@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { Order, Product, OrderStatus, Buyer } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useAuth } from '../contexts/AuthContext';
 import { printInvoice } from '../utils/printInvoice';
 
 
@@ -33,6 +34,8 @@ const OrderDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { t } = useLanguage();
+  const { user } = useAuth();
+  const canViewBuyers = Boolean(user?.permissions?.['Buyers']);
   const [order, setOrder] = useState<Order | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [buyer, setBuyer] = useState<Buyer | null>(null);
@@ -65,25 +68,21 @@ useEffect(() => {
         status: normalizeStatus(orderData.status)
       });
 
-      // Fetch products and buyer in parallel
-      const [productsResponse, buyerResponse] = await Promise.all([
-        fetch('/api/products', { credentials: 'include' }),
-        orderData.buyerId ? 
-          fetch(`/api/buyers/${orderData.buyerId}`, { credentials: 'include' }) : 
-          Promise.resolve(null)
-      ]);
+      // Products are required for order items.
+      const productsResponse = await fetch('/api/products', { credentials: 'include' });
 
       if (productsResponse.ok) {
         const productsData = await productsResponse.json();
         setProducts(productsData);
       }
 
-      if (buyerResponse && buyerResponse.ok) {
-        const buyerData = await buyerResponse.json();
-        setBuyer(buyerData);
-        console.log('Buyer loaded:', buyerData);
-      } else if (orderData.buyerId) {
-        console.error('Failed to load buyer for ID:', orderData.buyerId);
+      // Buyer endpoint is optional because order payload includes buyer display fields.
+      if (canViewBuyers && orderData.buyerId) {
+        const buyerResponse = await fetch(`/api/buyers/${orderData.buyerId}`, { credentials: 'include' });
+        if (buyerResponse.ok) {
+          const buyerData = await buyerResponse.json();
+          setBuyer(buyerData);
+        }
       }
     } catch (err) {
       console.error('Fetch error:', err);
@@ -94,7 +93,7 @@ useEffect(() => {
   };
 
   fetchOrderDetails();
-}, [id, navigate]);
+}, [id, navigate, canViewBuyers]);
   if (loading) {
     return (
       <div className="p-8 text-center">
@@ -114,6 +113,11 @@ useEffect(() => {
   const isDraft = order.status === OrderStatus.DRAFT;
   const isCancelled = order.status === OrderStatus.CANCELLED;
   const isDeleted = order.status === OrderStatus.DELETED;
+  const buyerDisplayName = buyer?.companyName || order.buyerCompanyName || order.buyerName || 'Unknown Buyer';
+  const buyerDisplayId = buyer?.id || order.buyerId || '---';
+  const buyerDisplayPhone = buyer?.phone || order.buyerPhone || '-';
+  const buyerDisplayEmail = buyer?.email || order.buyerEmail || '-';
+  const buyerDisplayAddress = buyer?.address || order.buyerAddress || '-';
 
   const handleStatusUpdate = async (newStatus: OrderStatus, note: string): Promise<boolean> => {
     if (!order) return;
@@ -223,40 +227,30 @@ useEffect(() => {
     <h2 className="text-[10px] font-black uppercase text-gray-400 tracking-widest">{t('order.partner')}</h2>
   </div>
   <div className="p-6 space-y-6">
-    {/* 🔥 ADD DEBUG INFO */}
-    {buyer ? (
-      <>
-        <div className="flex items-start gap-4">
-          <span className="material-symbols-outlined text-gray-300 text-2xl">store</span>
-          <div>
-            <p className="font-black text-slate-800 text-lg leading-tight">{buyer.companyName || 'No company name'}</p>
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">Account ID: #{buyer.id?.slice(0, 8) || '---'}</p>
-          </div>
-        </div>
-        
-        <div className="flex items-start gap-4">
-          <span className="material-symbols-outlined text-gray-300 text-2xl">call</span>
-          <div>
-            <p className="font-bold text-slate-800 text-sm">{buyer.phone || 'No phone'}</p>
-            <p className="text-xs text-gray-400 font-medium">{buyer.email || 'No email'}</p>
-          </div>
-        </div>
-
-        <div className="flex items-start gap-4">
-          <span className="material-symbols-outlined text-gray-300 text-2xl">location_on</span>
-          <p className="text-sm font-medium text-slate-600 leading-relaxed pr-8">
-            {buyer.address || 'No address'}
-          </p>
-        </div>
-      </>
-    ) : (
-      /* 🔥 SHOW DEBUG MESSAGE WHEN BUYER IS NULL */
-      <div className="text-center py-8 text-gray-400">
-        <span className="material-symbols-outlined text-4xl mb-2">person</span>
-        <p>Buyer data not loaded</p>
-        <p className="text-xs">Order buyerId: {order?.buyerId}</p>
+    {/* ðŸ”¥ ADD DEBUG INFO */}
+    {/* Buyer details: prefer fetched buyer, fallback to order-level fields */}
+    <div className="flex items-start gap-4">
+      <span className="material-symbols-outlined text-gray-300 text-2xl">store</span>
+      <div>
+        <p className="font-black text-slate-800 text-lg leading-tight">{buyerDisplayName}</p>
+        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">Account ID: #{buyerDisplayId.slice(0, 8)}</p>
       </div>
-    )}
+    </div>
+    
+    <div className="flex items-start gap-4">
+      <span className="material-symbols-outlined text-gray-300 text-2xl">call</span>
+      <div>
+        <p className="font-bold text-slate-800 text-sm">{buyerDisplayPhone}</p>
+        <p className="text-xs text-gray-400 font-medium">{buyerDisplayEmail}</p>
+      </div>
+    </div>
+
+    <div className="flex items-start gap-4">
+      <span className="material-symbols-outlined text-gray-300 text-2xl">location_on</span>
+      <p className="text-sm font-medium text-slate-600 leading-relaxed pr-8">
+        {buyerDisplayAddress}
+      </p>
+    </div>
   </div>
 </div>
 
@@ -284,7 +278,7 @@ useEffect(() => {
       <div className="text-right shrink-0">
         <div className="flex items-center justify-end gap-1.5 mb-1">
           <span className="text-xs font-black text-slate-800">{quantity}</span>
-          <span className="text-[10px] text-gray-300 font-bold">× {priceAtOrder.toLocaleString()}</span>
+          <span className="text-[10px] text-gray-300 font-bold">Ã— {priceAtOrder.toLocaleString()}</span>
         </div>
         <p className="text-sm font-black text-primary">ETB {total.toLocaleString()}</p>
       </div>
@@ -619,3 +613,7 @@ useEffect(() => {
 };
 
 export default OrderDetails;
+
+
+
+

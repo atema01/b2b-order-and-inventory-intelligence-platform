@@ -1,19 +1,16 @@
 
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { CreditRequest, Buyer } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 
 const CreditRequests: React.FC = () => {
+  const navigate = useNavigate();
   const [requests, setRequests] = useState<CreditRequest[]>([]);
   const [buyers, setBuyers] = useState<Buyer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const { t } = useLanguage();
-  
-  // State for partial approval editing
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [approveAmount, setApproveAmount] = useState<number>(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -32,15 +29,9 @@ const CreditRequests: React.FC = () => {
           throw new Error(data.error || 'Failed to load credit requests');
         }
 
-        if (!buyersRes.ok) {
-          const data = await buyersRes.json().catch(() => ({}));
-          throw new Error(data.error || 'Failed to load buyers');
-        }
-
-        const [creditData, buyersData] = await Promise.all([
-          creditRes.json(),
-          buyersRes.json()
-        ]);
+        // Buyers lookup is optional; this page should still work with Credits-only permission.
+        const creditData = await creditRes.json();
+        const buyersData = buyersRes.ok ? await buyersRes.json() : [];
 
         if (!isMounted) return;
         setRequests(Array.isArray(creditData) ? creditData : []);
@@ -69,73 +60,6 @@ const CreditRequests: React.FC = () => {
   const approvedThisMonth = requests
     .filter(r => r.status === 'Approved' || r.status === 'Partially Approved')
     .reduce((acc, r) => acc + (r.approvedAmount || r.amount), 0);
-
-  const startApproval = (req: CreditRequest) => {
-    setEditingId(req.id);
-    setApproveAmount(req.amount);
-  };
-
-  const cancelApproval = () => {
-    setEditingId(null);
-    setApproveAmount(0);
-  };
-
-  const refreshRequests = async () => {
-    const res = await fetch('/api/credits', { credentials: 'include' });
-    if (res.ok) {
-      const data = await res.json();
-      setRequests(Array.isArray(data) ? data : []);
-    }
-  };
-
-  const confirmApproval = async (req: CreditRequest) => {
-    const isPartial = approveAmount < req.amount;
-    const status = isPartial ? 'Partially Approved' : 'Approved';
-    try {
-      const response = await fetch(`/api/credits/${req.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          status,
-          approvedAmount: approveAmount
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Failed to approve request');
-      }
-
-      await refreshRequests();
-      setEditingId(null);
-      setApproveAmount(0);
-    } catch (err) {
-      console.error('Approve credit request error:', err);
-      alert(err instanceof Error ? err.message : 'Failed to approve request');
-    }
-  };
-
-  const handleReject = async (req: CreditRequest) => {
-    try {
-      const response = await fetch(`/api/credits/${req.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ status: 'Rejected' })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Failed to reject request');
-      }
-
-      await refreshRequests();
-    } catch (err) {
-      console.error('Reject credit request error:', err);
-      alert(err instanceof Error ? err.message : 'Failed to reject request');
-    }
-  };
 
   if (loading) {
     return (
@@ -218,19 +142,32 @@ const CreditRequests: React.FC = () => {
                 <th className="px-6 py-5">{t('credits.approved')}</th>
                 <th className="px-6 py-5">{t('common.reason')}</th>
                 <th className="px-6 py-5">{t('common.status')}</th>
-                <th className="px-6 py-5 text-right">{t('common.actions')}</th>
+                <th className="px-6 py-5 text-right"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
               {requests.map(req => {
                 const buyer = buyers.find(b => b.id === req.buyerId);
-                const isEditingThis = editingId === req.id;
+                const buyerLabel = buyer?.companyName || req.buyerId || 'Unknown';
 
                 return (
-                  <tr key={req.id} className="group hover:bg-gray-50 transition-all">
+                  <tr
+                    key={req.id}
+                    className="group hover:bg-gray-50 transition-all cursor-pointer"
+                    onClick={() => navigate(`/credits/${req.id}`)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        navigate(`/credits/${req.id}`);
+                      }
+                    }}
+                    tabIndex={0}
+                    role="button"
+                    aria-label={`Open credit request ${req.id}`}
+                  >
                     <td className="px-6 py-5 font-bold text-slate-800">{req.id}</td>
                     <td className="px-6 py-5">
-                      <p className="font-bold text-slate-700 text-sm">{buyer?.companyName || 'Unknown'}</p>
+                      <p className="font-bold text-slate-700 text-sm">{buyerLabel}</p>
                       <p className="text-[10px] text-gray-400">{req.requestDate}</p>
                     </td>
                     <td className="px-6 py-5 text-sm font-semibold text-slate-500">
@@ -242,16 +179,7 @@ const CreditRequests: React.FC = () => {
                     </td>
                     <td className="px-6 py-5 font-black text-slate-800">ETB {req.amount.toLocaleString()}</td>
                     <td className="px-6 py-5 font-black text-emerald-600">
-                      {isEditingThis ? (
-                        <input 
-                          type="number" 
-                          className="w-24 px-2 py-1 border border-gray-300 rounded text-sm font-bold focus:ring-primary focus:border-primary"
-                          value={approveAmount}
-                          onChange={(e) => setApproveAmount(parseFloat(e.target.value) || 0)}
-                        />
-                      ) : (
-                        (req.approvedAmount || 0) > 0 ? `ETB ${req.approvedAmount?.toLocaleString()}` : '-'
-                      )}
+                      {(req.approvedAmount || 0) > 0 ? `ETB ${req.approvedAmount?.toLocaleString()}` : '-'}
                     </td>
                     <td className="px-6 py-5 text-xs font-bold text-slate-500">{req.reason}</td>
                     <td className="px-6 py-5">
@@ -266,41 +194,7 @@ const CreditRequests: React.FC = () => {
                       </span>
                     </td>
                     <td className="px-6 py-5 text-right">
-                      {req.status === 'Pending' && (
-                        isEditingThis ? (
-                          <div className="flex justify-end gap-2">
-                            <button 
-                              onClick={cancelApproval}
-                              className="px-3 py-1 bg-gray-200 text-gray-600 rounded-lg text-xs font-bold hover:bg-gray-300"
-                            >
-                              {t('common.cancel')}
-                            </button>
-                            <button 
-                              onClick={() => confirmApproval(req)}
-                              className="px-3 py-1 bg-primary text-white rounded-lg text-xs font-bold hover:bg-primary-hover shadow-lg shadow-primary/20"
-                            >
-                              {t('common.confirm')}
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button 
-                              onClick={() => handleReject(req)}
-                              className="p-2 rounded-xl bg-red-50 text-red-600 hover:bg-red-600 hover:text-white transition-all"
-                              title="Reject"
-                            >
-                              <span className="material-symbols-outlined text-lg font-bold">close</span>
-                            </button>
-                            <button 
-                              onClick={() => startApproval(req)}
-                              className="p-2 rounded-xl bg-emerald-50 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-all"
-                              title="Review & Approve"
-                            >
-                              <span className="material-symbols-outlined text-lg font-bold">edit_note</span>
-                            </button>
-                          </div>
-                        )
-                      )}
+                      <span className="material-symbols-outlined text-gray-300 group-hover:text-primary transition-colors">arrow_forward</span>
                     </td>
                   </tr>
                 );

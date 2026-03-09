@@ -25,6 +25,27 @@ const buildPayment = (row: any) => ({
   notes: row.notes || ''
 });
 
+const createNotification = async (
+  type: string,
+  title: string,
+  message: string,
+  severity: 'low' | 'medium' | 'high',
+  recipientId: string,
+  relatedId?: string
+) => {
+  await pool.query(
+    `INSERT INTO notifications (type, title, message, time, is_read, severity, recipient_id, related_id)
+     VALUES ($1, $2, $3, $4, false, $5, $6, $7)`,
+    [type, title, message, new Date().toISOString(), severity, recipientId, relatedId || null]
+  );
+};
+
+const getOrderPaymentStatus = (amountPaid: number, total: number): 'Unpaid' | 'Partially Paid' | 'Paid' => {
+  if (amountPaid <= 0) return 'Unpaid';
+  if (amountPaid >= total) return 'Paid';
+  return 'Partially Paid';
+};
+
 // GET /api/payments
 export const getAllPayments = async (req: Request, res: Response) => {
   const userRole = (req as any).user?.role;
@@ -139,6 +160,16 @@ export const createPayment = async (req: Request, res: Response) => {
       `Payment ${paymentId} submitted for order ${orderId}.`
     );
 
+    // Notify internal team that a buyer submitted a new payment proof for review.
+    await createNotification(
+      'Payment',
+      'Payment Proof Submitted',
+      `New payment ${paymentId} was submitted for order ${orderId}.`,
+      'medium',
+      'seller',
+      paymentId
+    );
+
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error('Create payment error:', err);
@@ -161,6 +192,11 @@ export const updatePaymentStatus = async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Invalid status' });
   }
 
+  // Rejected and mismatched reviews must include context for the buyer.
+  if ((status === 'Rejected' || status === 'Mismatched') && !String(notes || '').trim()) {
+    return res.status(400).json({ error: 'Notes are required for rejected or mismatched payments' });
+  }
+
   try {
     await pool.query('BEGIN');
 
@@ -178,37 +214,38 @@ export const updatePaymentStatus = async (req: Request, res: Response) => {
     }
 
     const payment = paymentResult.rows[0];
-    if (payment.status !== 'Pending Review') {
+    const orderResult = await pool.query(
+      'SELECT id, total, amount_paid FROM orders WHERE id = $1 FOR UPDATE',
+      [payment.order_id]
+    );
+    if (orderResult.rows.length === 0) {
       await pool.query('ROLLBACK');
-      return res.status(400).json({ error: 'Only pending payments can be updated' });
+      return res.status(404).json({ error: 'Order not found' });
     }
 
-    if (status === 'Approved') {
-      const orderResult = await pool.query(
-        'SELECT total, amount_paid FROM orders WHERE id = $1 FOR UPDATE',
-        [payment.order_id]
-      );
-      if (orderResult.rows.length === 0) {
-        await pool.query('ROLLBACK');
-        return res.status(404).json({ error: 'Order not found' });
-      }
+    // Keep order financials consistent when toggling in/out of Approved status.
+    const order = orderResult.rows[0];
+    const total = parseNumber(order.total);
+    const currentPaid = parseNumber(order.amount_paid);
+    const payAmount = parseNumber(payment.amount);
+    const wasApproved = payment.status === 'Approved';
+    const willBeApproved = status === 'Approved';
+    let newPaid = currentPaid;
 
-      const order = orderResult.rows[0];
-      const total = parseNumber(order.total);
-      const amountPaid = parseNumber(order.amount_paid);
-      const payAmount = parseNumber(payment.amount);
-      const newPaid = Math.min(total, amountPaid + payAmount);
-      const paymentStatus = newPaid >= total ? 'Paid' : 'Partially Paid';
-
-      await pool.query(
-        `UPDATE orders
-         SET amount_paid = $1,
-             payment_status = $2,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $3`,
-        [newPaid, paymentStatus, payment.order_id]
-      );
+    if (!wasApproved && willBeApproved) {
+      newPaid = Math.min(total, currentPaid + payAmount);
+    } else if (wasApproved && !willBeApproved) {
+      newPaid = Math.max(0, currentPaid - payAmount);
     }
+
+    await pool.query(
+      `UPDATE orders
+       SET amount_paid = $1,
+           payment_status = $2,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3`,
+      [newPaid, getOrderPaymentStatus(newPaid, total), order.id]
+    );
 
     const updatedPayment = await pool.query(
       `UPDATE payments
@@ -224,6 +261,16 @@ export const updatePaymentStatus = async (req: Request, res: Response) => {
       'Update Payment Status',
       'Finance',
       `Payment ${id} marked ${status}.`
+    );
+
+    // Notify buyer when payment review is completed or revised.
+    await createNotification(
+      'Payment',
+      `Payment ${status}`,
+      `Your payment ${id} for order ${payment.order_id} is now ${status}.${notes ? ` Note: ${notes}` : ''}`,
+      status === 'Approved' ? 'low' : 'medium',
+      payment.buyer_id,
+      payment.order_id
     );
 
     await pool.query('COMMIT');

@@ -13,6 +13,7 @@ import AddProduct from './pages/AddProduct';
 import ReturnsManagement from './pages/ReturnsManagement';
 import LogReturn from './pages/LogReturn';
 import CreditRequests from './pages/CreditRequests';
+import CreditDetails from './pages/CreditDetails';
 import LogCredit from './pages/LogCredit';
 import Buyers from './pages/Buyers';
 import BuyerDetails from './pages/BuyerDetails';
@@ -28,8 +29,6 @@ import PricingDetails from './pages/PricingDetails';
 import AddPricingRule from './pages/AddPricingRule';
 import AddBulkRule from './pages/AddBulkRule';
 import BulkRuleDetails from './pages/BulkRuleDetails';
-import AddMarginRule from './pages/AddMarginRule';
-import MarginRuleDetails from './pages/MarginRuleDetails';
 import AddRole from './pages/AddRole';
 import AddStaff from './pages/AddStaff';
 import Analytics from './pages/Analytics';
@@ -54,6 +53,19 @@ import { Staff } from './types';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 
+type PermissionKey =
+  | 'Orders'
+  | 'Products'
+  | 'Returns'
+  | 'Credits'
+  | 'Reports'
+  | 'Payments'
+  | 'Buyers'
+  | 'Pricing'
+  | 'Staff'
+  | 'Roles'
+  | 'Logs';
+
 // Protected Route Wrapper
 const RequireAuth: React.FC<{ allowedTypes?: string[] }> = ({ allowedTypes }) => {
   const { isAuthenticated, user, isLoading } = useAuth();
@@ -74,6 +86,24 @@ const RequireAuth: React.FC<{ allowedTypes?: string[] }> = ({ allowedTypes }) =>
   }
 
   return <Outlet />;
+};
+
+const RequirePermission: React.FC<{ permission?: PermissionKey; allOf?: PermissionKey[]; children: React.ReactNode }> = ({ permission, allOf, children }) => {
+  const { user } = useAuth();
+
+  // Public seller routes like Dashboard/Settings pass no permission and are always allowed.
+  if (!permission && (!allOf || allOf.length === 0)) return <>{children}</>;
+
+  // Backward compatibility: full Admin role bypasses fine-grained checks.
+  if (user?.role === 'Admin') return <>{children}</>;
+
+  // Role permissions from /api/auth/me are the source of truth for route access.
+  const hasSinglePermission = permission ? Boolean(user?.permissions?.[permission]) : true;
+  const hasAllPermissions = allOf ? allOf.every((perm) => Boolean(user?.permissions?.[perm])) : true;
+  const canAccess = hasSinglePermission && hasAllPermissions;
+  if (canAccess) return <>{children}</>;
+
+  return <Navigate to="/" replace />;
 };
 
 // Root Component wrapper to route based on User Type
@@ -107,40 +137,39 @@ const RootRouter: React.FC = () => {
     <SellerLayout onLogout={logout}>
       <Routes>
         <Route path="/" element={<Dashboard />} />
-        <Route path="/orders" element={<Orders />} />
-        <Route path="/orders/:id" element={<OrderDetails />} />
-        <Route path="/orders/:id/process" element={<OrderProcess />} />
-        <Route path="/orders/create" element={<CreateOrder />} />
-        <Route path="/products" element={<Products />} />
-        <Route path="/products/add" element={<AddProduct />} />
-        <Route path="/products/:id" element={<ProductDetails />} />
-        <Route path="/products/restock" element={<RestockProduct />} />
-        <Route path="/returns" element={<ReturnsManagement />} />
-        <Route path="/returns/log" element={<LogReturn />} />
-        <Route path="/credits" element={<CreditRequests />} />
-        <Route path="/credits/log" element={<LogCredit />} />
-        <Route path="/buyers" element={<Buyers />} />
-        <Route path="/buyers/:id" element={<BuyerDetails />} />
-        <Route path="/buyers/add" element={<AddBuyer />} />
-        <Route path="/payments" element={<Payments />} />
-        <Route path="/payments/:id" element={<PaymentReview />} />
-        <Route path="/staff" element={<StaffManagement />} />
-        <Route path="/staff/:id" element={<StaffDetails />} />
-        <Route path="/staff/add" element={<AddStaff />} />
-        <Route path="/roles" element={<ManageRoles />} />
-        <Route path="/roles/add" element={<AddRole />} />
-        <Route path="/roles/:id" element={<RoleDetails />} />
-        <Route path="/pricing" element={<PricingManagement />} />
-        <Route path="/pricing/add" element={<AddPricingRule />} />
-        <Route path="/pricing/:id" element={<PricingDetails />} />
-        <Route path="/pricing/bulk/add" element={<AddBulkRule />} />
-        <Route path="/pricing/bulk/:id" element={<BulkRuleDetails />} />
-        <Route path="/pricing/margin/add" element={<AddMarginRule />} />
-        <Route path="/pricing/margin/:id" element={<MarginRuleDetails />} />
-        <Route path="/analytics" element={<Analytics />} />
+        <Route path="/orders" element={<RequirePermission permission="Orders"><Orders /></RequirePermission>} />
+        <Route path="/orders/:id" element={<RequirePermission permission="Orders"><OrderDetails /></RequirePermission>} />
+        <Route path="/orders/:id/process" element={<RequirePermission permission="Orders"><OrderProcess /></RequirePermission>} />
+        <Route path="/orders/create" element={<RequirePermission permission="Orders"><CreateOrder /></RequirePermission>} />
+        <Route path="/products" element={<RequirePermission permission="Products"><Products /></RequirePermission>} />
+        <Route path="/products/add" element={<RequirePermission permission="Products"><AddProduct /></RequirePermission>} />
+        <Route path="/products/:id" element={<RequirePermission permission="Products"><ProductDetails /></RequirePermission>} />
+        <Route path="/products/restock" element={<RequirePermission permission="Products"><RestockProduct /></RequirePermission>} />
+        <Route path="/returns" element={<RequirePermission permission="Returns"><ReturnsManagement /></RequirePermission>} />
+        <Route path="/returns/log" element={<RequirePermission permission="Returns"><LogReturn /></RequirePermission>} />
+        <Route path="/credits" element={<RequirePermission permission="Credits"><CreditRequests /></RequirePermission>} />
+        <Route path="/credits/:id" element={<RequirePermission permission="Credits"><CreditDetails /></RequirePermission>} />
+        <Route path="/credits/log" element={<RequirePermission permission="Credits"><LogCredit /></RequirePermission>} />
+        <Route path="/buyers" element={<RequirePermission permission="Buyers"><Buyers /></RequirePermission>} />
+        <Route path="/buyers/:id" element={<RequirePermission permission="Buyers"><BuyerDetails /></RequirePermission>} />
+        <Route path="/buyers/add" element={<RequirePermission permission="Buyers"><AddBuyer /></RequirePermission>} />
+        <Route path="/payments" element={<RequirePermission permission="Payments"><Payments /></RequirePermission>} />
+        <Route path="/payments/:id" element={<RequirePermission permission="Payments"><PaymentReview /></RequirePermission>} />
+        <Route path="/staff" element={<RequirePermission permission="Staff"><StaffManagement /></RequirePermission>} />
+        <Route path="/staff/:id" element={<RequirePermission permission="Staff"><StaffDetails /></RequirePermission>} />
+        <Route path="/staff/add" element={<RequirePermission allOf={['Staff', 'Roles']}><AddStaff /></RequirePermission>} />
+        <Route path="/roles" element={<RequirePermission permission="Roles"><ManageRoles /></RequirePermission>} />
+        <Route path="/roles/add" element={<RequirePermission permission="Roles"><AddRole /></RequirePermission>} />
+        <Route path="/roles/:id" element={<RequirePermission permission="Roles"><RoleDetails /></RequirePermission>} />
+        <Route path="/pricing" element={<RequirePermission permission="Pricing"><PricingManagement /></RequirePermission>} />
+        <Route path="/pricing/add" element={<RequirePermission permission="Pricing"><AddPricingRule /></RequirePermission>} />
+        <Route path="/pricing/:id" element={<RequirePermission permission="Pricing"><PricingDetails /></RequirePermission>} />
+        <Route path="/pricing/bulk/add" element={<RequirePermission permission="Pricing"><AddBulkRule /></RequirePermission>} />
+        <Route path="/pricing/bulk/:id" element={<RequirePermission permission="Pricing"><BulkRuleDetails /></RequirePermission>} />
+        <Route path="/analytics" element={<RequirePermission permission="Reports"><Analytics /></RequirePermission>} />
         <Route path="/notifications" element={<Notifications />} />
-        <Route path="/alerts" element={<Alerts />} />
-        <Route path="/logs" element={<SystemLogs />} />
+        <Route path="/alerts" element={<RequirePermission permission="Products"><Alerts /></RequirePermission>} />
+        <Route path="/logs" element={<RequirePermission permission="Logs"><SystemLogs /></RequirePermission>} />
         <Route path="/settings" element={<Settings />} />
       </Routes>
     </SellerLayout>
@@ -234,6 +263,7 @@ const SellerLayout: React.FC<{ children: React.ReactNode, onLogout: () => void }
     if (path === '/returns') return t('header.returns');
     if (path === '/returns/log') return t('header.logReturn');
     if (path === '/credits') return t('header.creditMgmt');
+    if (path.startsWith('/credits/') && path !== '/credits/log') return 'Credit Request';
     if (path === '/credits/log') return t('header.logCredit');
     if (path.startsWith('/orders/create')) return t('header.createOrder');
     if (path.startsWith('/orders/') && path.endsWith('/process')) return t('header.processOrder');
@@ -255,7 +285,6 @@ const SellerLayout: React.FC<{ children: React.ReactNode, onLogout: () => void }
     if (path === '/pricing') return t('header.pricing');
     if (path === '/pricing/add') return t('header.addPricing');
     if (path.startsWith('/pricing/bulk')) return t('header.bulkConfig');
-    if (path.startsWith('/pricing/margin')) return t('header.marginConfig');
     if (path.startsWith('/pricing/')) return t('header.tierConfig');
     if (path.startsWith('/payments/')) return t('header.reviewPayment');
     if (path === '/payments') return t('header.payments');

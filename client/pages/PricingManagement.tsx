@@ -1,14 +1,13 @@
 
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { PricingRule, BulkDiscountRule, MarginDiscountRule } from '../types';
+import { PricingRule, BulkDiscountRule } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 
 const PricingManagement: React.FC = () => {
   const [rules, setRules] = useState<PricingRule[]>([]);
   const [bulkRules, setBulkRules] = useState<BulkDiscountRule[]>([]);
-  const [marginRules, setMarginRules] = useState<MarginDiscountRule[]>([]);
-  const [activeTab, setActiveTab] = useState<'tiers' | 'bulk' | 'margin'>('tiers');
+  const [activeTab, setActiveTab] = useState<'tiers' | 'bulk'>('tiers');
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -21,27 +20,24 @@ const PricingManagement: React.FC = () => {
       setLoading(true);
       setError('');
       try {
-        const [tiersRes, bulkRes, marginRes] = await Promise.all([
+        const [tiersRes, bulkRes] = await Promise.all([
           fetch('/api/pricing/tiers', { credentials: 'include' }),
-          fetch('/api/pricing/bulk', { credentials: 'include' }),
-          fetch('/api/pricing/margin', { credentials: 'include' })
+          fetch('/api/pricing/bulk', { credentials: 'include' })
         ]);
 
-        if (!tiersRes.ok || !bulkRes.ok || !marginRes.ok) {
+        if (!tiersRes.ok || !bulkRes.ok) {
           const errData = await tiersRes.json().catch(() => ({}));
           throw new Error(errData.error || 'Failed to load pricing rules');
         }
 
-        const [tiersData, bulkData, marginData] = await Promise.all([
+        const [tiersData, bulkData] = await Promise.all([
           tiersRes.json(),
-          bulkRes.json(),
-          marginRes.json()
+          bulkRes.json()
         ]);
 
         if (!isMounted) return;
         setRules(Array.isArray(tiersData) ? tiersData : []);
         setBulkRules(Array.isArray(bulkData) ? bulkData : []);
-        setMarginRules(Array.isArray(marginData) ? marginData : []);
       } catch (err) {
         console.error('Load pricing rules error:', err);
         if (isMounted) {
@@ -77,14 +73,12 @@ const PricingManagement: React.FC = () => {
   const getNewRulePath = () => {
     if (activeTab === 'tiers') return "/pricing/add";
     if (activeTab === 'bulk') return "/pricing/bulk/add";
-    if (activeTab === 'margin') return "/pricing/margin/add";
     return "/pricing/add";
   };
 
   const getNewRuleLabel = () => {
     if (activeTab === 'tiers') return t('pricing.newTier');
     if (activeTab === 'bulk') return t('pricing.newVolume');
-    if (activeTab === 'margin') return t('pricing.newConstraint');
     return t('pricing.newTier');
   }
 
@@ -111,7 +105,6 @@ const PricingManagement: React.FC = () => {
           {[
             { id: 'tiers', label: t('pricing.tiers'), icon: 'stars' },
             { id: 'bulk', label: t('pricing.bulk'), icon: 'reorder' },
-            { id: 'margin', label: t('pricing.margin'), icon: 'security' },
           ].map(tab => (
             <button
               key={tab.id}
@@ -246,63 +239,6 @@ const PricingManagement: React.FC = () => {
               >
                 + {t('pricing.newVolumeStep')}
               </Link>
-           </div>
-        </div>
-      )}
-
-      {/* Margin View */}
-      {activeTab === 'margin' && (
-        <div className="bg-white rounded-[40px] border border-gray-100 shadow-sm overflow-hidden p-8 lg:p-12">
-           <div className="max-w-3xl mx-auto space-y-12">
-              <div className="flex items-start gap-6">
-                <div className="size-16 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center shrink-0">
-                  <span className="material-symbols-outlined text-4xl">security</span>
-                </div>
-                <div>
-                  <h2 className="text-2xl font-black text-slate-800">{t('pricing.marginTitle')}</h2>
-                  <p className="text-sm text-gray-500 font-medium leading-relaxed">
-                    {t('pricing.marginDesc')}
-                  </p>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {marginRules.map(mr => (
-                  <Link 
-                    key={mr.id} 
-                    to={`/pricing/margin/${mr.id}`}
-                    className="p-8 bg-slate-900 text-white rounded-[40px] shadow-2xl space-y-8 relative overflow-hidden group hover:scale-[1.02] transition-all"
-                  >
-                    <div className="absolute top-0 right-0 size-24 bg-primary/20 blur-3xl rounded-full"></div>
-                    
-                    <div className="space-y-6 relative z-10">
-                      <div>
-                        <p className="text-[10px] font-black uppercase text-primary tracking-widest mb-1">{t('pricing.trigger')}</p>
-                        <p className="text-lg font-bold">Cost {'>'} ETB {mr.minUnitCost.toLocaleString()}</p>
-                        <p className="text-lg font-bold">Margin {'>'}  {mr.minMarginPercentage}%</p>
-                      </div>
-
-                      <div className="pt-6 border-t border-white/10 flex justify-between items-center">
-                        <div>
-                          <p className="text-[10px] font-black uppercase text-emerald-400 tracking-widest mb-1">{t('pricing.incentive')}</p>
-                          <p className="text-3xl font-black">{mr.bonusDiscount}% <span className="text-xs uppercase opacity-40">{t('pricing.bonus')}</span></p>
-                        </div>
-                        <div className="bg-white/10 hover:bg-white/20 p-4 rounded-2xl transition-all">
-                          <span className="material-symbols-outlined">tune</span>
-                        </div>
-                      </div>
-                    </div>
-                  </Link>
-                ))}
-
-                <Link 
-                  to="/pricing/margin/add"
-                  className="h-full border-2 border-dashed border-gray-100 rounded-[40px] flex flex-col items-center justify-center p-8 text-gray-300 hover:text-primary hover:border-primary transition-all group"
-                >
-                   <span className="material-symbols-outlined text-4xl mb-2 group-hover:scale-110 transition-transform">add_moderator</span>
-                   <p className="font-black text-xs uppercase tracking-widest">{t('pricing.addConstraint')}</p>
-                </Link>
-              </div>
            </div>
         </div>
       )}

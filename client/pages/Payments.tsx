@@ -1,10 +1,11 @@
 
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Buyer, Payment, PaymentStatus } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 
 const Payments: React.FC = () => {
+  const navigate = useNavigate();
   const [payments, setPayments] = useState<Payment[]>([]);
   const [buyers, setBuyers] = useState<Buyer[]>([]);
   const [activeFilter, setActiveFilter] = useState<string>('All');
@@ -29,15 +30,9 @@ const Payments: React.FC = () => {
           throw new Error(data.error || 'Failed to load payments');
         }
 
-        if (!buyersRes.ok) {
-          const data = await buyersRes.json().catch(() => ({}));
-          throw new Error(data.error || 'Failed to load buyers');
-        }
-
-        const [paymentsData, buyersData] = await Promise.all([
-          paymentsRes.json(),
-          buyersRes.json()
-        ]);
+        // Buyers lookup is optional; users with Payments-only permission may not have Buyers permission.
+        const paymentsData = await paymentsRes.json();
+        const buyersData = buyersRes.ok ? await buyersRes.json() : [];
 
         if (!isMounted) return;
         setPayments(Array.isArray(paymentsData) ? paymentsData : []);
@@ -153,10 +148,24 @@ const Payments: React.FC = () => {
             <tbody className="divide-y divide-gray-50">
               {filteredPayments.map(p => {
                 const buyer = buyers.find(b => b.id === p.buyerId);
+                const buyerLabel = buyer?.companyName || p.buyerId || 'Unknown Buyer';
                 return (
-                  <tr key={p.id} className="hover:bg-gray-50 transition-colors group">
+                  <tr
+                    key={p.id}
+                    className="hover:bg-gray-50 transition-colors cursor-pointer"
+                    onClick={() => navigate(`/payments/${p.id}`)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        navigate(`/payments/${p.id}`);
+                      }
+                    }}
+                    tabIndex={0}
+                    role="button"
+                    aria-label={`Open payment ${p.referenceId}`}
+                  >
                     <td className="px-6 py-5 font-bold text-slate-800">{p.referenceId}</td>
-                    <td className="px-6 py-5 font-semibold text-slate-600">{buyer?.companyName || 'Unknown Buyer'}</td>
+                    <td className="px-6 py-5 font-semibold text-slate-600">{buyerLabel}</td>
                     <td className="px-6 py-5 font-black text-primary">ETB {p.amount.toLocaleString()}</td>
                     <td className="px-6 py-5 text-sm text-gray-400">{p.dateTime}</td>
                     <td className="px-6 py-5">
@@ -164,11 +173,7 @@ const Payments: React.FC = () => {
                         {getStatusLabel(p.status)}
                       </span>
                     </td>
-                    <td className="px-6 py-5 text-right">
-                      <Link to={`/payments/${p.id}`} className="bg-primary text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-all shadow-lg shadow-primary/20">
-                        {t('common.view')}
-                      </Link>
-                    </td>
+                    <td className="px-6 py-5 text-right"></td>
                   </tr>
                 );
               })}
@@ -180,6 +185,7 @@ const Payments: React.FC = () => {
         <div className="lg:hidden divide-y divide-gray-50">
           {filteredPayments.map(p => {
              const buyer = buyers.find(b => b.id === p.buyerId);
+             const buyerLabel = buyer?.companyName || p.buyerId || 'Unknown Buyer';
              return (
               <Link key={p.id} to={`/payments/${p.id}`} className="p-5 flex flex-col gap-4 active:bg-gray-50 transition-all">
                 <div className="flex justify-between items-start">
@@ -193,7 +199,7 @@ const Payments: React.FC = () => {
                 </div>
                 <div className="flex justify-between items-end">
                   <div className="space-y-1">
-                    <p className="text-sm font-bold text-slate-600">{buyer?.companyName || 'Unknown Buyer'}</p>
+                    <p className="text-sm font-bold text-slate-600">{buyerLabel}</p>
                     <p className="text-[10px] font-bold text-gray-400 uppercase">{p.dateTime}</p>
                   </div>
                   <p className="text-lg font-black text-primary">ETB {p.amount.toLocaleString()}</p>

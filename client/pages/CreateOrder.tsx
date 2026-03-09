@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+﻿import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Product, Buyer, OrderStatus, Order } from '../types';
 
@@ -14,6 +14,7 @@ const CreateOrder: React.FC = () => {
   const [buyers, setBuyers] = useState<Buyer[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [selectedBuyerId, setSelectedBuyerId] = useState('');
+  const [buyerInput, setBuyerInput] = useState('');
   const [orderDate, setOrderDate] = useState(new Date().toISOString().split('T')[0]);
   const [paymentTerm, setPaymentTerm] = useState('Immediate');
   const [cart, setCart] = useState<{ productId: string, quantity: number }[]>([]);
@@ -48,6 +49,10 @@ const CreateOrder: React.FC = () => {
             if (orderRes.ok) {
               const order = await orderRes.json();
               setSelectedBuyerId(order.buyerId);
+              const buyer = buyersData.find((b: Buyer) => b.id === order.buyerId);
+              if (buyer) {
+                setBuyerInput(`${buyer.companyName} (${buyer.id})`);
+              }
               setOrderDate(order.date);
               setPaymentTerm(order.paymentTerms || 'Immediate');
               setCart(order.items.map((i: any) => ({ 
@@ -68,6 +73,30 @@ const CreateOrder: React.FC = () => {
   }, [editId]);
 
   const selectedBuyer = useMemo(() => buyers.find(b => b.id === selectedBuyerId), [buyers, selectedBuyerId]);
+
+  const handleBuyerInputChange = (value: string) => {
+    setBuyerInput(value);
+
+    const exactById = buyers.find(b => b.id === value.trim());
+    if (exactById) {
+      setSelectedBuyerId(exactById.id);
+      return;
+    }
+
+    const idMatch = value.match(/\(([^)]+)\)\s*$/);
+    if (idMatch) {
+      const matched = buyers.find(b => b.id === idMatch[1]);
+      if (matched) {
+        setSelectedBuyerId(matched.id);
+        return;
+      }
+    }
+
+    const exactByName = buyers.find(
+      b => b.companyName.toLowerCase() === value.trim().toLowerCase()
+    );
+    setSelectedBuyerId(exactByName?.id || '');
+  };
 
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
@@ -267,15 +296,24 @@ const CreateOrder: React.FC = () => {
                 <label className="text-xs font-bold text-slate-600 ml-1">Retail Buyer</label>
                 <div className="relative">
                   <span className="absolute left-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-gray-400">store</span>
-                  <select 
+                  <input
+                    list="buyers-list"
                     className="w-full pl-12 pr-4 py-4 bg-white border border-gray-200 rounded-2xl font-bold text-slate-800 focus:ring-2 focus:ring-primary/20 focus:border-primary appearance-none shadow-sm"
-                    value={selectedBuyerId}
-                    onChange={(e) => setSelectedBuyerId(e.target.value)}
-                  >
-                    <option value="">Select Buyer...</option>
-                    {buyers.map(b => <option key={b.id} value={b.id}>{b.companyName} ({b.tier})</option>)}
-                  </select>
+                    placeholder="Type or select buyer..."
+                    value={buyerInput}
+                    onChange={(e) => handleBuyerInputChange(e.target.value)}
+                  />
+                  <datalist id="buyers-list">
+                    {buyers.map(b => (
+                      <option key={b.id} value={`${b.companyName} (${b.id})`}>
+                        {b.tier}
+                      </option>
+                    ))}
+                  </datalist>
                 </div>
+                {buyerInput && !selectedBuyerId && (
+                  <p className="text-xs text-amber-600 font-medium ml-1">Select a valid buyer from the list.</p>
+                )}
               </div>
 
               {selectedBuyer && (
@@ -434,7 +472,7 @@ const CreateOrder: React.FC = () => {
                     <div key={item.productId} className="p-6 flex justify-between items-center">
                       <div className="min-w-0">
                         <p className="font-black text-slate-800 text-sm truncate mb-0.5">{p?.name}</p>
-                        <p className="text-xs font-medium text-gray-400">{item.quantity} units × {p?.price.toLocaleString()} ETB</p>
+                        <p className="text-xs font-medium text-gray-400">{item.quantity} units Ã— {p?.price.toLocaleString()} ETB</p>
                       </div>
                       <div className="flex items-center gap-6">
                         <p className="text-base font-black text-slate-900">{(item.quantity * (p?.price || 0)).toLocaleString()} ETB</p>
@@ -535,3 +573,6 @@ const CreateOrder: React.FC = () => {
 };
 
 export default CreateOrder;
+
+
+

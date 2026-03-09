@@ -4,66 +4,68 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { OrderStatus, Order, Product } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 
-// Holt-Winters Multiplicative Algorithm (Robust)
-const holtWintersForecast = (data: number[], seasonLength: number, alpha: number = 0.2, beta: number = 0.1, gamma: number = 0.1, forecastLength: number) => {
-  // Requires at least 2 full seasons to initialize and smooth
+// Holt-Winters Additive (robust against sparse/zero-heavy demand)
+const holtWintersForecast = (
+  data: number[],
+  seasonLength: number,
+  alpha: number = 0.3,
+  beta: number = 0.1,
+  gamma: number = 0.1,
+  forecastLength: number
+) => {
   if (data.length < seasonLength * 2) return [];
 
-  const L = new Array(data.length).fill(0);
-  const T = new Array(data.length).fill(0);
-  const S = new Array(data.length).fill(0);
+  const clean = data.map((v) => (Number.isFinite(v) ? Math.max(0, v) : 0));
+  const zeroRatio = clean.filter((v) => v === 0).length / clean.length;
 
-  // 1. Initialize Seasonality
-  let seasonalAvg = 0;
+  // Fallback for very sparse series to avoid unstable seasonal extrapolation
+  if (zeroRatio > 0.6) {
+    const window = Math.min(6, clean.length);
+    const recent = clean.slice(-window);
+    const prev = clean.slice(-(window * 2), -window);
+    const recentAvg = recent.reduce((a, b) => a + b, 0) / Math.max(1, recent.length);
+    const prevAvg = prev.length > 0 ? prev.reduce((a, b) => a + b, 0) / prev.length : recentAvg;
+    const trend = (recentAvg - prevAvg) * 0.35; // damped
+    const cap = Math.max(1, recentAvg * 3);
+
+    return Array.from({ length: forecastLength }, (_, i) => {
+      const val = recentAvg + trend * (i + 1);
+      return Math.max(0, Math.min(cap, val));
+    });
+  }
+
+  const firstSeason = clean.slice(0, seasonLength);
+  const secondSeason = clean.slice(seasonLength, seasonLength * 2);
+  const avg1 = firstSeason.reduce((a, b) => a + b, 0) / seasonLength;
+  const avg2 = secondSeason.reduce((a, b) => a + b, 0) / seasonLength;
+
+  let level = avg1;
+  let trend = (avg2 - avg1) / seasonLength;
+  const seasonals = new Array(clean.length).fill(0);
+
   for (let i = 0; i < seasonLength; i++) {
-    seasonalAvg += data[i];
-  }
-  seasonalAvg /= seasonLength;
-
-  for (let i = 0; i < seasonLength; i++) {
-    // Prevent division by zero if seasonal average is 0
-    S[i] = seasonalAvg === 0 ? 1 : data[i] / seasonalAvg;
+    seasonals[i] = clean[i] - avg1;
   }
 
-  // 2. Initialize Level and Trend
-  // Level: Initial approximate level
-  L[seasonLength - 1] = data[seasonLength - 1] === 0 ? 0.1 : data[seasonLength - 1]; 
-  
-  // Trend: Average slope over the first season
-  let trendSum = 0;
-  for (let i = 0; i < seasonLength; i++) {
-      trendSum += (data[seasonLength + i] - data[i]) / seasonLength;
-  }
-  T[seasonLength - 1] = trendSum / seasonLength;
+  for (let t = seasonLength; t < clean.length; t++) {
+    const y = clean[t];
+    const prevLevel = level;
+    const prevSeason = seasonals[t - seasonLength] ?? 0;
 
-  // 3. Triple Exponential Smoothing
-  for (let i = seasonLength; i < data.length; i++) {
-    const val = data[i];
-    const prevL = L[i - 1];
-    const prevT = T[i - 1];
-    const prevS = S[i - seasonLength];
-    
-    const safePrevS = prevS < 0.001 ? 0.001 : prevS; // Avoid div by zero
-
-    L[i] = alpha * (val / safePrevS) + (1 - alpha) * (prevL + prevT);
-    T[i] = beta * (L[i] - prevL) + (1 - beta) * prevT;
-    
-    const safeL = L[i] < 0.001 ? 0.001 : L[i]; // Avoid div by zero
-    S[i] = gamma * (val / safeL) + (1 - gamma) * prevS;
+    level = alpha * (y - prevSeason) + (1 - alpha) * (level + trend);
+    trend = beta * (level - prevLevel) + (1 - beta) * trend;
+    seasonals[t] = gamma * (y - level) + (1 - gamma) * prevSeason;
   }
 
-  // 4. Generate Forecasts
-  const forecasts = [];
-  const lastL = L[data.length - 1];
-  const lastT = T[data.length - 1];
+  const recentAvg = clean.slice(-Math.min(6, clean.length)).reduce((a, b) => a + b, 0) / Math.min(6, clean.length);
+  const cap = Math.max(1, recentAvg * 4);
 
+  const forecasts: number[] = [];
   for (let m = 1; m <= forecastLength; m++) {
-    // Cyclical seasonality index from the last computed season
-    const sIdx = data.length - seasonLength + ((m - 1) % seasonLength);
-    const seasonalComponent = S[sIdx];
-    
-    const forecastVal = (lastL + m * lastT) * seasonalComponent;
-    forecasts.push(Math.max(0, forecastVal));
+    const sIdx = clean.length - seasonLength + ((m - 1) % seasonLength);
+    const seasonal = seasonals[sIdx] ?? 0;
+    const value = level + m * trend + seasonal;
+    forecasts.push(Math.max(0, Math.min(cap, value)));
   }
 
   return forecasts;
@@ -106,12 +108,21 @@ const Analytics: React.FC = () => {
   const [growthTrend, setGrowthTrend] = useState<{name: string, val: number}[]>([]);
   const [isGrowthPositive, setIsGrowthPositive] = useState(true);
   const [totalRevenue, setTotalRevenue] = useState(0);
+  const [inventoryTurnover, setInventoryTurnover] = useState(0);
+  const [inventoryTurnoverTrend, setInventoryTurnoverTrend] = useState<{name: string, val: number}[]>([]);
+  const [deliveredOrders, setDeliveredOrders] = useState<Order[]>([]);
+  const [analyticsProducts, setAnalyticsProducts] = useState<Product[]>([]);
   
   // Forecasting State
   const [forecastChartData, setForecastChartData] = useState<any[]>([]);
   const [forecastMessage, setForecastMessage] = useState('');
   const [hasSufficientData, setHasSufficientData] = useState(false);
   const [timeResolution, setTimeResolution] = useState<'Day' | 'Week' | 'Month'>('Month');
+  const [selectedForecastProductId, setSelectedForecastProductId] = useState('');
+  const [productForecastChartData, setProductForecastChartData] = useState<any[]>([]);
+  const [productForecastMessage, setProductForecastMessage] = useState('');
+  const [hasSufficientProductData, setHasSufficientProductData] = useState(false);
+  const [productTimeResolution, setProductTimeResolution] = useState<'Day' | 'Week' | 'Month'>('Month');
 
   // Custom File Upload State
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -151,9 +162,10 @@ const Analytics: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [ordersRes, productsRes] = await Promise.all([
+        const [ordersRes, productsRes, turnoverRes] = await Promise.all([
           fetch('/api/orders', { credentials: 'include' }),
-          fetch('/api/products', { credentials: 'include' })
+          fetch('/api/products', { credentials: 'include' }),
+          fetch('/api/orders/metrics/inventory-turnover', { credentials: 'include' })
         ]);
 
         if (!ordersRes.ok) throw new Error('Failed to fetch orders');
@@ -164,11 +176,29 @@ const Analytics: React.FC = () => {
           productsRes.json()
         ]);
 
+        if (turnoverRes.ok) {
+          const turnoverData = await turnoverRes.json();
+          setInventoryTurnover(Number(turnoverData.turnover || 0));
+          setInventoryTurnoverTrend(
+            Array.isArray(turnoverData.trend) && turnoverData.trend.length > 0
+              ? turnoverData.trend
+              : [{ name: 'No Data', val: 0 }]
+          );
+        } else {
+          setInventoryTurnover(0);
+          setInventoryTurnoverTrend([{ name: 'No Data', val: 0 }]);
+        }
+
         const allOrders = ordersData
           .map(o => ({ ...o, status: normalizeStatus(o.status) }))
           .filter(o => o.status === OrderStatus.DELIVERED);
 
         const allProducts = productsData;
+        setDeliveredOrders(allOrders);
+        setAnalyticsProducts(allProducts);
+        if (!selectedForecastProductId && allProducts.length > 0) {
+          setSelectedForecastProductId(allProducts[0].id);
+        }
 
         if (allOrders.length === 0) {
             setForecastMessage(t('analytics.noData'));
@@ -416,6 +446,8 @@ const Analytics: React.FC = () => {
         console.error('Analytics fetch error:', err);
         setForecastMessage(t('analytics.noData'));
         setGrowthTrend([{name: 'No Data', val: 0}]);
+        setInventoryTurnover(0);
+        setInventoryTurnoverTrend([{ name: 'No Data', val: 0 }]);
         setForecastChartData([{ name: 'No Data', hist: 0, fc: null }]);
         setPredictions([
             { name: 'Data Pending', growth: '--', badge: 'Waiting...', isPositive: true },
@@ -428,6 +460,146 @@ const Analytics: React.FC = () => {
 
     fetchData();
   }, [t]);
+
+  useEffect(() => {
+    if (!selectedForecastProductId) {
+      setHasSufficientProductData(false);
+      setProductTimeResolution('Month');
+      setProductForecastMessage('Select a product to forecast demand.');
+      setProductForecastChartData([{ name: 'No Data', hist: 0, fc: null }]);
+      return;
+    }
+
+    const productOrders = deliveredOrders.filter((o) =>
+      o.items.some((item) => item.productId === selectedForecastProductId)
+    );
+
+    if (productOrders.length === 0) {
+      setHasSufficientProductData(false);
+      setProductTimeResolution('Month');
+      setProductForecastMessage('No delivered order history found for this product.');
+      setProductForecastChartData([{ name: 'No Data', hist: 0, fc: null }]);
+      return;
+    }
+
+    const timestamps = productOrders.map((o) => new Date(o.date).getTime()).filter((ts) => !isNaN(ts));
+    if (timestamps.length === 0) {
+      setHasSufficientProductData(false);
+      setProductTimeResolution('Month');
+      setProductForecastMessage('No valid date history found for this product.');
+      setProductForecastChartData([{ name: 'No Data', hist: 0, fc: null }]);
+      return;
+    }
+
+    const minTime = Math.min(...timestamps);
+    const maxTime = Math.max(...timestamps);
+    const daySpan = (maxTime - minTime) / (1000 * 3600 * 24);
+
+    let mode: 'daily' | 'weekly' | 'monthly' = 'monthly';
+    if (daySpan <= 60) mode = 'daily';
+    else if (daySpan <= 730) mode = 'weekly';
+    else mode = 'monthly';
+
+    const aggregatedUnits: Record<string, number> = {};
+    const getKey = (d: Date) => {
+      if (mode === 'daily') return d.toISOString().split('T')[0];
+      if (mode === 'weekly') return getStartOfWeek(d).toISOString().split('T')[0];
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    };
+
+    productOrders.forEach((o) => {
+      const dateObj = new Date(o.date);
+      if (isNaN(dateObj.getTime())) return;
+      const key = getKey(dateObj);
+      const qty = o.items
+        .filter((item) => item.productId === selectedForecastProductId)
+        .reduce((sum, item) => sum + item.quantity, 0);
+      aggregatedUnits[key] = (aggregatedUnits[key] || 0) + qty;
+    });
+
+    const timelineData: { date: Date; key: string; units: number }[] = [];
+    const startDate = new Date(minTime);
+    const endDate = new Date(maxTime);
+    let current = mode === 'daily'
+      ? getStartOfDay(startDate)
+      : mode === 'weekly'
+        ? getStartOfWeek(startDate)
+        : getStartOfMonth(startDate);
+
+    let loopGuard = 0;
+    while (current <= endDate && loopGuard < 1000) {
+      const key = getKey(current);
+      timelineData.push({
+        date: new Date(current),
+        key,
+        units: aggregatedUnits[key] || 0
+      });
+      if (mode === 'daily') current.setDate(current.getDate() + 1);
+      else if (mode === 'weekly') current.setDate(current.getDate() + 7);
+      else current.setMonth(current.getMonth() + 1);
+      loopGuard++;
+    }
+
+    let seasonLength = 12;
+    let forecastLength = 6;
+    let resolutionLabel: 'Day' | 'Week' | 'Month' = 'Month';
+    if (mode === 'daily') {
+      seasonLength = 7;
+      forecastLength = 7;
+      resolutionLabel = 'Day';
+    } else if (mode === 'weekly') {
+      seasonLength = 4;
+      forecastLength = 8;
+      resolutionLabel = 'Week';
+    }
+    setProductTimeResolution(resolutionLabel);
+
+    const historyValues = timelineData.map((d) => d.units);
+    const isSufficient = historyValues.length >= seasonLength * 2;
+    setHasSufficientProductData(isSufficient);
+    if (!isSufficient) {
+      setProductForecastMessage(
+        `Data accumulation in progress. Need ${seasonLength * 2} ${resolutionLabel.toLowerCase()}s (Have ${historyValues.length}).`
+      );
+    } else {
+      setProductForecastMessage(`Projecting demand by ${resolutionLabel} (Holt-Winters)`);
+    }
+
+    let forecastedValues: number[] = [];
+    if (isSufficient) {
+      forecastedValues = holtWintersForecast(historyValues, seasonLength, 0.3, 0.1, 0.1, forecastLength);
+    }
+
+    const formatLabel = (d: Date) => {
+      if (mode === 'daily') return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      if (mode === 'weekly') return d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' });
+      return d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+    };
+
+    const chartData: { name: string; hist: number | null; fc: number | null }[] = timelineData.map((pt) => ({
+      name: formatLabel(pt.date),
+      hist: pt.units,
+      fc: null
+    }));
+
+    if (isSufficient && forecastedValues.length > 0) {
+      const lastDate = new Date(timelineData[timelineData.length - 1].date);
+      for (let i = 0; i < forecastedValues.length; i++) {
+        if (mode === 'daily') lastDate.setDate(lastDate.getDate() + 1);
+        else if (mode === 'weekly') lastDate.setDate(lastDate.getDate() + 7);
+        else lastDate.setMonth(lastDate.getMonth() + 1);
+        chartData.push({
+          name: formatLabel(lastDate),
+          hist: null,
+          fc: Math.round(forecastedValues[i])
+        });
+      }
+    } else if (chartData.length === 0) {
+      chartData.push({ name: 'No Data', hist: 0, fc: null });
+    }
+
+    setProductForecastChartData(chartData);
+  }, [deliveredOrders, selectedForecastProductId]);
 
   const handleExport = () => {
     const csvRows = [];
@@ -633,11 +805,6 @@ const Analytics: React.FC = () => {
     reader.readAsText(file);
   };
 
-  // Mini Chart Dummy for static cards (Inventory)
-  const dummyTrend = [
-    { name: '1', val: 10 }, { name: '2', val: 15 }, { name: '3', val: 12 }, { name: '4', val: 20 },
-  ];
-
   return (
     <div className="p-4 lg:p-8 space-y-8 max-w-7xl mx-auto pb-32">
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
@@ -721,13 +888,13 @@ const Analytics: React.FC = () => {
             <p className="text-sm font-bold text-gray-500">{t('analytics.inventoryTurnover')}</p>
             <div className="w-24 h-10">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={dummyTrend}>
+                <LineChart data={inventoryTurnoverTrend}>
                   <Line type="monotone" dataKey="val" stroke="#F59E0B" strokeWidth={3} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             </div>
           </div>
-          <h3 className="text-3xl font-black text-slate-800">5.8x</h3>
+          <h3 className="text-3xl font-black text-slate-800">{inventoryTurnover.toFixed(2)}x</h3>
           <p className="text-xs text-gray-400 flex items-center gap-1 font-bold">
             <span className="material-symbols-outlined text-xs">sync</span> {t('analytics.efficiencyScore')}
           </p>
@@ -804,6 +971,93 @@ const Analytics: React.FC = () => {
                       fillOpacity={1} 
                       fill="url(#colorFc)" 
                       connectNulls={true}
+                  />
+                )}
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </section>
+
+      {/* Product Forecast Card */}
+      <section className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="p-6 border-b border-gray-50 flex flex-col md:flex-row md:items-center justify-between gap-6">
+          <div className="flex items-center gap-4">
+            <div className="p-3 bg-emerald-50 rounded-2xl text-emerald-600">
+              <span className="material-symbols-outlined">inventory_2</span>
+            </div>
+            <div>
+              <h2 className="text-xl font-extrabold text-slate-800">Product Demand Forecast ({productTimeResolution})</h2>
+              <p className="text-sm text-gray-400 font-medium">{productForecastMessage}</p>
+            </div>
+          </div>
+          <div className="flex flex-col gap-2 min-w-[260px]">
+            <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">Select Product</label>
+            <select
+              value={selectedForecastProductId}
+              onChange={(e) => setSelectedForecastProductId(e.target.value)}
+              className="w-full px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-bold text-slate-700 shadow-sm focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+            >
+              <option value="">Choose product...</option>
+              {analyticsProducts.map((p) => (
+                <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="p-6 bg-gray-50/30">
+          <div className="flex gap-6 items-center mb-4">
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-slate-300"></span>
+              <span className="text-[10px] font-black text-gray-400 uppercase">{t('analytics.historical')}</span>
+            </div>
+            {hasSufficientProductData && (
+              <div className="flex items-center gap-2">
+                <span className="w-3 h-3 rounded-full bg-emerald-600"></span>
+                <span className="text-[10px] font-black text-gray-400 uppercase">{t('analytics.forecasted')}</span>
+              </div>
+            )}
+          </div>
+          <div className="h-[350px] w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={productForecastChartData}>
+                <defs>
+                  <linearGradient id="colorProductHist" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#CBD5E1" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="#CBD5E1" stopOpacity={0}/>
+                  </linearGradient>
+                  {hasSufficientProductData && (
+                    <linearGradient id="colorProductFc" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#059669" stopOpacity={0.8}/>
+                      <stop offset="95%" stopColor="#059669" stopOpacity={0}/>
+                    </linearGradient>
+                  )}
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                <XAxis dataKey="name" stroke="#94A3B8" fontSize={10} fontWeight="bold" axisLine={false} tickLine={false} minTickGap={30} />
+                <YAxis stroke="#94A3B8" fontSize={10} fontWeight="bold" axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)', fontWeight: 'bold' }} />
+                <Area
+                  type="monotone"
+                  dataKey="hist"
+                  name={t('analytics.historical')}
+                  stroke="#94A3B8"
+                  strokeWidth={3}
+                  fillOpacity={1}
+                  fill="url(#colorProductHist)"
+                  connectNulls={true}
+                />
+                {hasSufficientProductData && (
+                  <Area
+                    type="monotone"
+                    dataKey="fc"
+                    name={t('analytics.forecasted')}
+                    stroke="#059669"
+                    strokeWidth={4}
+                    strokeDasharray="8 4"
+                    fillOpacity={1}
+                    fill="url(#colorProductFc)"
+                    connectNulls={true}
                   />
                 )}
               </AreaChart>

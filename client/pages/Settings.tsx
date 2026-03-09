@@ -7,10 +7,14 @@ import { DEFAULT_STORAGE_LOCATIONS, fetchStorageLocations, normalizeStorageLocat
 const Settings: React.FC = () => {
   const { language, setLanguage, t } = useLanguage();
   const { user } = useAuth();
+  const permissions = user?.permissions || {};
   const [emailNotifs, setEmailNotifs] = useState(true);
   const [pushNotifs, setPushNotifs] = useState(false);
   const isBuyer = user?.role === 'Buyer';
-  const canManageLocations = !isBuyer && (user?.role === 'Admin' || (user?.permissions && user.permissions['Products']));
+  const isAdmin = user?.role === 'Admin';
+  const canManageProductsSettings = !isBuyer && (isAdmin || Boolean(permissions['Products']));
+  const canManageLocations = canManageProductsSettings;
+  const canManageFinancials = !isBuyer && (isAdmin || Boolean(permissions['Payments']));
   const [profileName, setProfileName] = useState('');
   const [profileEmail, setProfileEmail] = useState('');
   const [profilePhone, setProfilePhone] = useState('');
@@ -25,7 +29,6 @@ const Settings: React.FC = () => {
 
   // Tax Management State
   const [taxRate, setTaxRate] = useState(15);
-  const [canManageFinancials, setCanManageFinancials] = useState(false);
 
   // Storage Location Management
   const [storageLocations, setStorageLocations] = useState<StorageLocation[]>(DEFAULT_STORAGE_LOCATIONS);
@@ -39,16 +42,24 @@ const Settings: React.FC = () => {
   const [pwdError, setPwdError] = useState('');
 
 useEffect(() => {
-  if (!isBuyer) {
+  if (canManageProductsSettings) {
     fetch('/api/categories', { credentials: 'include' })
       .then(res => res.json())
       .then(data => setCategories(data));
-    
+  } else {
+    setCategories([]);
+  }
+}, [canManageProductsSettings]);
+
+useEffect(() => {
+  if (canManageFinancials) {
     fetch('/api/settings/tax-rate', { credentials: 'include' })
       .then(res => res.json())
       .then(data => setTaxRate((data.taxRate ?? 0) * 100));
+  } else {
+    setTaxRate(15);
   }
-}, [isBuyer]);
+}, [canManageFinancials]);
 
 useEffect(() => {
   if (user) {
@@ -81,18 +92,6 @@ useEffect(() => {
     .catch(() => {});
   return () => { active = false; };
 }, [canManageLocations]);
-
-  // Determine access to financial settings
-useEffect(() => {
-  if (user && !isBuyer) {
-    const hasPaymentsAccess = 
-      user.role === 'Admin' || 
-      (user.permissions && user.permissions['Payments']);
-    setCanManageFinancials(!!hasPaymentsAccess);
-  } else {
-    setCanManageFinancials(false);
-  }
-}, [user, isBuyer]);
 
   const handleLanguageChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     setLanguage(e.target.value as 'en' | 'am');
@@ -294,7 +293,7 @@ const handleProfileUpdate = async (e: React.FormEvent) => {
         </div>
 
         {/* Financial Settings - For Admins or Staff with Credits/Payments Access */}
-        {!isBuyer && canManageFinancials && (
+        {canManageFinancials && (
             <section className="bg-white rounded-[32px] p-8 border border-gray-100 shadow-sm space-y-6">
                 <div className="flex items-center gap-3 border-b border-gray-50 pb-4">
                     <span className="material-symbols-outlined text-primary text-xl">account_balance</span>
@@ -328,7 +327,7 @@ const handleProfileUpdate = async (e: React.FormEvent) => {
         )}
 
         {/* Product Categories - Only for Sellers */}
-        {!isBuyer && (
+        {canManageProductsSettings && (
             <section className="bg-white rounded-[32px] p-8 border border-gray-100 shadow-sm space-y-6">
                 <div className="flex items-center gap-3 border-b border-gray-50 pb-4">
                     <span className="material-symbols-outlined text-primary text-xl">category</span>

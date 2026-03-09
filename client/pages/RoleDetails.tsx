@@ -1,4 +1,4 @@
-
+﻿
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Role } from '../types';
@@ -144,7 +144,7 @@ const RoleDetails: React.FC = () => {
                   <span className={`px-3 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-widest ${getLevelColor(role.accessLevel)} shadow-lg shadow-black/5`}>
                     {role.accessLevel} Level
                   </span>
-                  <span className="text-xs text-gray-400 font-bold">• ID: {role.id}</span>
+                  <span className="text-xs text-gray-400 font-bold">â€¢ ID: {role.id}</span>
                 </div>
               </div>
               <div className="flex items-center gap-3 w-full md:w-auto">
@@ -328,3 +328,6 @@ const RoleDetails: React.FC = () => {
 };
 
 export default RoleDetails;
+
+
+

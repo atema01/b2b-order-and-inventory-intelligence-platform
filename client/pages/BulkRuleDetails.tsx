@@ -125,7 +125,7 @@ const BulkRuleDetails: React.FC = () => {
   };
 
   return (
-    <div className="p-4 lg:p-8 max-w-2xl mx-auto space-y-8 pb-32">
+    <div className="p-4 lg:p-8 max-w-2xl mx-auto space-y-8 pb-44">
       <div className="bg-white rounded-[40px] p-8 lg:p-12 border border-gray-100 shadow-sm space-y-10">
         <div className="flex justify-between items-start">
            <div className="flex items-center gap-5">
@@ -169,6 +169,9 @@ const BulkRuleDetails: React.FC = () => {
             </div>
         </div>
       </div>
+
+      {/* Spacer to keep last content visible above fixed action bar */}
+      <div className="h-32 lg:h-36" aria-hidden="true"></div>
 
       <footer className="fixed bottom-0 left-0 lg:left-64 right-0 bg-white/95 backdrop-blur-xl border-t border-gray-100 p-6 z-40 shadow-2xl">
         <div className="max-w-2xl mx-auto flex gap-4">

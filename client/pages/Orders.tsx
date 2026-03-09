@@ -45,29 +45,44 @@ const Orders: React.FC = () => {
       status: normalizeStatus(o.status)
     }));
 
+  // Resolve buyer label from embedded order fields first, then buyers lookup.
+  const getBuyerLabel = (order: any): string => {
+    return (
+      order?.buyerCompanyName ||
+      order?.buyerName ||
+      order?.companyName ||
+      order?.buyer?.companyName ||
+      order?.buyer?.name ||
+      buyers.find(b => b.id === order?.buyerId)?.companyName ||
+      'Unknown Buyer'
+    );
+  };
+
   // Fetch orders and buyers from real API
   useEffect(() => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const [ordersRes, buyersRes] = await Promise.all([
-          fetch('/api/orders', { credentials: 'include' }),
-          fetch('/api/buyers', { credentials: 'include' })
-          
-        ]);
-        
-
-        if (ordersRes.ok && buyersRes.ok) {
-          const [ordersData, buyersData] = await Promise.all([
-            ordersRes.json(),
-            buyersRes.json()
-          ]);
+        // Orders page requires Orders data; buyers lookup is optional for names/search.
+        const ordersRes = await fetch('/api/orders', { credentials: 'include' });
+        if (ordersRes.ok) {
+          const ordersData = await ordersRes.json();
           if (ordersData?.data) {
             setOrders(normalizeOrders(ordersData.data));
           } else {
             setOrders(normalizeOrders(ordersData));
           }
-          setBuyers(buyersData);
+        } else {
+          setOrders([]);
+        }
+
+        // If user lacks Buyers permission this may return 403; keep page functional.
+        const buyersRes = await fetch('/api/buyers', { credentials: 'include' });
+        if (buyersRes.ok) {
+          const buyersData = await buyersRes.json();
+          setBuyers(Array.isArray(buyersData) ? buyersData : []);
+        } else {
+          setBuyers([]);
         }
       } catch (err) {
         console.error('Failed to fetch orders/buyers:', err);
@@ -108,7 +123,7 @@ const Orders: React.FC = () => {
   const searchLower = searchQuery.trim().toLowerCase();
   const searchedOrders = searchLower
     ? filteredOrders.filter(order => {
-        const buyerName = buyers.find(b => b.id === order.buyerId)?.companyName || '';
+        const buyerName = getBuyerLabel(order);
         return (
           order.id.toLowerCase().includes(searchLower) ||
           buyerName.toLowerCase().includes(searchLower)
@@ -233,7 +248,7 @@ const Orders: React.FC = () => {
         ) : pagedOrders.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
             {pagedOrders.map(order => {
-              const buyer = buyers.find(b => b.id === order.buyerId);
+              const buyerLabel = getBuyerLabel(order);
               const isDraft = order.status === OrderStatus.DRAFT;
               const isPending = order.status === OrderStatus.PENDING;
               const isProcessing = order.status === OrderStatus.PROCESSING;
@@ -257,7 +272,7 @@ const Orders: React.FC = () => {
 
                   <div className="mb-8">
                     <h3 className={`text-xl font-black text-slate-800 leading-tight group-hover:text-primary transition-colors ${isDeleted ? 'line-through' : ''}`}>
-                      {buyer?.companyName || 'Unknown Buyer'}
+                      {buyerLabel}
                     </h3>
                     <div className="flex items-center gap-1.5 mt-2 opacity-50">
                        <span className="material-symbols-outlined text-sm">calendar_today</span>

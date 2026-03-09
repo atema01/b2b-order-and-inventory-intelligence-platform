@@ -39,8 +39,42 @@ const BuyerLayout: React.FC<BuyerLayoutProps> = ({ children, onLogout }) => {
   };
 
   useEffect(() => {
+    let isMounted = true;
+
+    const toBuyerProfile = (me: any): Buyer => ({
+      id: me?.id || user?.id || '',
+      companyName: me?.companyName || 'Buyer Account',
+      contactPerson: me?.name || 'Buyer',
+      email: me?.email || '',
+      phone: me?.phone || '',
+      address: '',
+      creditLimit: 0,
+      availableCredit: 0,
+      outstandingBalance: 0,
+      paymentTerms: '',
+      totalSpend: 0,
+      totalOrders: 0,
+      status: 'Active',
+      tier: me?.tier || 'Bronze',
+      discountRate: 0,
+      joinDate: ''
+    });
+
+    const loadBuyerProfile = async () => {
+      if (!user || user.role !== 'Buyer') return;
+      try {
+        const res = await fetch('/api/auth/me', { credentials: 'include' });
+        if (!res.ok) return;
+        const meData = await res.json();
+        if (isMounted) setBuyer(toBuyerProfile(meData));
+      } catch (err) {
+        console.error('Failed to load buyer profile:', err);
+      }
+    };
+
     // Load Buyer from Auth Context/DB
     if (user && user.role === 'Buyer') {
+      loadBuyerProfile();
     }
 
     // Initial Cart Count
@@ -52,7 +86,10 @@ const BuyerLayout: React.FC<BuyerLayoutProps> = ({ children, onLogout }) => {
     // Listen for custom cart events
     window.addEventListener('cart-updated', updateCartCount);
     
-    return () => window.removeEventListener('cart-updated', updateCartCount);
+    return () => {
+      isMounted = false;
+      window.removeEventListener('cart-updated', updateCartCount);
+    };
   }, [location, user]); 
 
   useEffect(() => {

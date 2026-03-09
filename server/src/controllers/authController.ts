@@ -28,6 +28,27 @@ export const register = async (req: Request, res: Response) => {
   }
 
   try {
+    const actorRoleId = (req as any).user?.role;
+    if (!actorRoleId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Enforce dynamic RBAC based on the target account type being created.
+    const actorPermResult = await pool.query(
+      `SELECT p.name
+       FROM role_permissions rp
+       JOIN permissions p ON rp.permission_id = p.id
+       WHERE rp.role_id = $1`,
+      [actorRoleId]
+    );
+    const actorPermissions = new Set<string>(actorPermResult.rows.map((row: any) => row.name));
+
+    const isBuyer = role_id === 'R-BUYER';
+    const requiredPermission = isBuyer ? 'Buyers' : 'Staff';
+    if (!actorPermissions.has(requiredPermission) && !actorPermissions.has('Roles')) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
     // Hash password
     const passwordHash = await hashPassword(password);
 
@@ -36,7 +57,7 @@ export const register = async (req: Request, res: Response) => {
     let values: any[] = [];
 
     // Determine if this is a buyer (check role_id)
-    const isBuyer = role_id === 'R-BUYER';
+    // Reuse the already computed role classification.
 
     if (isBuyer) {
       let discountRate = 0;
@@ -172,6 +193,7 @@ export const login = async (req: Request, res: Response) => {
 
     res.json({
       message: 'Login successful',
+      token,
       user: {
         id: user.id,
         email: user.email,

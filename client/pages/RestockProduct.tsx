@@ -117,7 +117,7 @@ const RestockProduct: React.FC = () => {
   const selectedProduct = products.find(p => p.id === selectedProductId);
 
   return (
-    <div className="p-4 lg:p-8 max-w-5xl mx-auto space-y-8 pb-32">
+    <div className="p-4 lg:p-8 max-w-5xl mx-auto space-y-8 pb-44">
       <div className="bg-white rounded-[32px] lg:rounded-[40px] p-6 lg:p-10 border border-gray-100 shadow-sm space-y-8">
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
           <div className="size-14 rounded-2xl bg-primary/10 text-primary flex items-center justify-center shrink-0">

@@ -2,6 +2,7 @@
 import { Request, Response } from 'express';
 import pool from '../config/db';
 import { logActivity } from '../utils/activityLog';
+import { hashPassword } from '../utils/auth';
 
 // server/src/controllers/buyerController.ts
 export const getAllBuyers = async (req: Request, res: Response) => {
@@ -173,11 +174,12 @@ export const resetBuyerPassword = async (req: Request, res: Response) => {
   }
 
   try {
-    // In production, you'd hash the password
-    // For now, store as plain text (you'll implement proper hashing later)
+    // Always hash passwords before persisting to protect credentials at rest.
+    const hashedPassword = await hashPassword(newPassword);
+
     const result = await pool.query(
-      'UPDATE users SET password_hash = $1 WHERE id = $2 RETURNING id',
-      [newPassword, id] // Replace with bcrypt.hash(newPassword) in production
+      'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id',
+      [hashedPassword, id]
     );
 
     if (result.rows.length === 0) {

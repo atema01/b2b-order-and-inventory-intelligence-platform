@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Buyer, Order, BuyerTier, PricingRule } from '../types';
 
@@ -79,7 +79,7 @@ const handleUpdate = async () => {
     });
 
     if (response.ok) {
-      // ✅ CRITICAL: Refetch the buyer data to ensure it's synced
+      // âœ… CRITICAL: Refetch the buyer data to ensure it's synced
       const updatedResponse = await fetch(`/api/buyers/${buyer.id}`, {
         credentials: 'include'
       });
@@ -144,7 +144,7 @@ const handleToggleStatus = async () => {
     });
 
     if (response.ok) {
-      // ✅ CRITICAL: Refetch the buyer data to ensure it's synced
+      // âœ… CRITICAL: Refetch the buyer data to ensure it's synced
       const updatedResponse = await fetch(`/api/buyers/${buyer.id}`, {
         credentials: 'include'
       });
@@ -196,7 +196,7 @@ const handleToggleStatus = async () => {
   };
 
   return (
-    <div className="p-4 lg:p-8 max-w-5xl mx-auto space-y-8 pb-40">
+    <div className={`p-4 lg:p-8 max-w-5xl mx-auto space-y-8 ${isEditing ? 'pb-96' : 'pb-44'}`}>
       <input 
         type="file" 
         ref={fileInputRef} 
@@ -238,7 +238,7 @@ const handleToggleStatus = async () => {
                   <span className={`px-3 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-widest ${getTierColor(buyer.tier || '')} shadow-lg shadow-black/5`}>
                     {buyer.tier ? `${buyer.tier} Member` : 'No Tier'}
                   </span>
-                  <span className="text-xs text-gray-400 font-bold">• Account ID: {buyer.id}</span>
+                  <span className="text-xs text-gray-400 font-bold">â€¢ Account ID: {buyer.id}</span>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
@@ -456,23 +456,27 @@ const handleToggleStatus = async () => {
 
       {/* Floating Save Bar */}
       {isEditing && (
-        <footer className="fixed bottom-0 left-0 lg:left-64 right-0 bg-white/95 backdrop-blur-xl border-t border-gray-100 p-6 z-50 shadow-2xl animate-in slide-in-from-bottom-5">
-          <div className="max-w-5xl mx-auto flex gap-4">
-            <button 
-              onClick={() => setIsEditing(false)}
-              className="flex-1 py-5 bg-gray-50 text-slate-500 rounded-[24px] font-black text-xs uppercase tracking-widest hover:bg-gray-100 transition-all active:scale-95"
-            >
-              Discard Changes
-            </button>
-            <button 
-              onClick={handleUpdate}
-              className="flex-[2] py-5 bg-primary text-white rounded-[24px] font-black text-xs uppercase tracking-widest shadow-2xl shadow-primary/30 hover:bg-primary-hover transition-all active:scale-95 flex items-center justify-center gap-3"
-            >
-              Save Profile Updates
-              <span className="material-symbols-outlined text-lg">check_circle</span>
-            </button>
-          </div>
-        </footer>
+        <>
+          {/* Spacer to keep last content visible above fixed action bar */}
+          <div className="h-32 lg:h-36" aria-hidden="true"></div>
+          <footer className="fixed bottom-0 left-0 lg:left-64 right-0 bg-white/95 backdrop-blur-xl border-t border-gray-100 p-6 z-50 shadow-2xl animate-in slide-in-from-bottom-5">
+            <div className="max-w-5xl mx-auto flex gap-4">
+              <button 
+                onClick={() => setIsEditing(false)}
+                className="flex-1 py-5 bg-gray-50 text-slate-500 rounded-[24px] font-black text-xs uppercase tracking-widest hover:bg-gray-100 transition-all active:scale-95"
+              >
+                Discard Changes
+              </button>
+              <button 
+                onClick={handleUpdate}
+                className="flex-[2] py-5 bg-primary text-white rounded-[24px] font-black text-xs uppercase tracking-widest shadow-2xl shadow-primary/30 hover:bg-primary-hover transition-all active:scale-95 flex items-center justify-center gap-3"
+              >
+                Save Profile Updates
+                <span className="material-symbols-outlined text-lg">check_circle</span>
+              </button>
+            </div>
+          </footer>
+        </>
       )}
 
       {/* Password Reset Modal */}
@@ -529,3 +533,6 @@ const handleToggleStatus = async () => {
 };
 
 export default BuyerDetails;
+
+
+

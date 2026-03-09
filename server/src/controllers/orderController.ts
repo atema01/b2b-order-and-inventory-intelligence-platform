@@ -273,8 +273,14 @@ export const getAllOrders = async (req: Request, res: Response) => {
         o.subtotal, o.tax, o.total, o.amount_paid AS "amountPaid",
         o.payment_status AS "paymentStatus", o.created_by AS "createdBy",
         o.payment_terms AS "paymentTerms",
-        o.stock_deducted AS "stockDeducted", o.history
+        o.stock_deducted AS "stockDeducted", o.history,
+        u.company_name AS "buyerCompanyName",
+        u.name AS "buyerName",
+        u.phone AS "buyerPhone",
+        u.email AS "buyerEmail",
+        u.address AS "buyerAddress"
       FROM orders o
+      LEFT JOIN users u ON u.id = o.buyer_id
       ORDER BY o.date DESC
       ${usePagination ? 'LIMIT $1 OFFSET $2' : ''}
       `,
@@ -513,7 +519,19 @@ export const updateOrder = async (req: Request, res: Response) => {
       `Order #${id.split('-').pop()} updated. Status: ${normalizedStatus}.`
     );
 
-    const result = await pool.query('SELECT * FROM orders WHERE id = $1', [id]);
+    const result = await pool.query(
+      `SELECT
+         o.*,
+         u.company_name AS "buyerCompanyName",
+         u.name AS "buyerName",
+         u.phone AS "buyerPhone",
+         u.email AS "buyerEmail",
+         u.address AS "buyerAddress"
+       FROM orders o
+       LEFT JOIN users u ON u.id = o.buyer_id
+       WHERE o.id = $1`,
+      [id]
+    );
     
     // Process the returned order to ensure numeric types
     const processedOrder = {
@@ -528,6 +546,11 @@ export const updateOrder = async (req: Request, res: Response) => {
       paymentStatus: result.rows[0].payment_status,
       paymentTerms: result.rows[0].payment_terms,
       createdBy: result.rows[0].created_by,
+      buyerCompanyName: result.rows[0].buyerCompanyName || null,
+      buyerName: result.rows[0].buyerName || null,
+      buyerPhone: result.rows[0].buyerPhone || null,
+      buyerEmail: result.rows[0].buyerEmail || null,
+      buyerAddress: result.rows[0].buyerAddress || null,
       stockDeducted: Boolean(result.rows[0].stock_deducted),
       history: result.rows[0].history || [],
       items: [] // Items will be fetched separately in getOrderById
@@ -590,7 +613,7 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
         : stockDeducted;
 
     // Update order status and history
-    const result = await pool.query(
+    await pool.query(
       `UPDATE orders SET 
         status = $1, 
         history = $2,
@@ -599,6 +622,20 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
        WHERE id = $4 
        RETURNING *`,
       [normalizedStatus, JSON.stringify(updatedHistory), newStockDeducted, id]
+    );
+
+    const result = await pool.query(
+      `SELECT
+         o.*,
+         u.company_name AS "buyerCompanyName",
+         u.name AS "buyerName",
+         u.phone AS "buyerPhone",
+         u.email AS "buyerEmail",
+         u.address AS "buyerAddress"
+       FROM orders o
+       LEFT JOIN users u ON u.id = o.buyer_id
+       WHERE o.id = $1`,
+      [id]
     );
 
     await logActivity(
@@ -621,6 +658,11 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
       paymentStatus: result.rows[0].payment_status,
       paymentTerms: result.rows[0].payment_terms,
       createdBy: result.rows[0].created_by,
+      buyerCompanyName: result.rows[0].buyerCompanyName || null,
+      buyerName: result.rows[0].buyerName || null,
+      buyerPhone: result.rows[0].buyerPhone || null,
+      buyerEmail: result.rows[0].buyerEmail || null,
+      buyerAddress: result.rows[0].buyerAddress || null,
       stockDeducted: Boolean(result.rows[0].stock_deducted),
       history: result.rows[0].history || []
     };
@@ -638,7 +680,16 @@ export const getOrderById = async (req: Request, res: Response) => {
   try {
     // Get order details
     const orderResult = await pool.query(
-      'SELECT * FROM orders WHERE id = $1',
+      `SELECT
+         o.*,
+         u.company_name AS "buyerCompanyName",
+         u.name AS "buyerName",
+         u.phone AS "buyerPhone",
+         u.email AS "buyerEmail",
+         u.address AS "buyerAddress"
+       FROM orders o
+       LEFT JOIN users u ON u.id = o.buyer_id
+       WHERE o.id = $1`,
       [id]
     );
 
@@ -668,6 +719,11 @@ export const getOrderById = async (req: Request, res: Response) => {
       paymentStatus: order.payment_status,
       paymentTerms: order.payment_terms,
       createdBy: order.created_by,
+      buyerCompanyName: order.buyerCompanyName || null,
+      buyerName: order.buyerName || null,
+      buyerPhone: order.buyerPhone || null,
+      buyerEmail: order.buyerEmail || null,
+      buyerAddress: order.buyerAddress || null,
       stockDeducted: Boolean(order.stock_deducted),
       history: order.history || [],
       items
@@ -692,9 +748,17 @@ export const getMyDraftOrder = async (req: Request, res: Response) => {
 
   try {
     const draftResult = await pool.query(
-      `SELECT * FROM orders
-       WHERE buyer_id = $1 AND status = 'Draft'
-       ORDER BY date DESC, updated_at DESC
+      `SELECT
+         o.*,
+         u.company_name AS "buyerCompanyName",
+         u.name AS "buyerName",
+         u.phone AS "buyerPhone",
+         u.email AS "buyerEmail",
+         u.address AS "buyerAddress"
+       FROM orders o
+       LEFT JOIN users u ON u.id = o.buyer_id
+       WHERE o.buyer_id = $1 AND o.status = 'Draft'
+       ORDER BY o.date DESC, o.updated_at DESC
        LIMIT 1`,
       [user.userId]
     );
@@ -718,6 +782,11 @@ export const getMyDraftOrder = async (req: Request, res: Response) => {
       paymentStatus: order.payment_status,
       paymentTerms: order.payment_terms,
       createdBy: order.created_by,
+      buyerCompanyName: order.buyerCompanyName || null,
+      buyerName: order.buyerName || null,
+      buyerPhone: order.buyerPhone || null,
+      buyerEmail: order.buyerEmail || null,
+      buyerAddress: order.buyerAddress || null,
       stockDeducted: Boolean(order.stock_deducted),
       history: order.history || [],
       items
@@ -893,5 +962,69 @@ export const updateOrderItemPicked = async (req: Request, res: Response) => {
   } catch (err) {
     console.error('Update order item picked error:', err);
     res.status(500).json({ error: 'Failed to update item picked status' });
+  }
+};
+
+// GET /api/orders/metrics/inventory-turnover
+export const getInventoryTurnoverMetrics = async (req: Request, res: Response) => {
+  try {
+    const stockResult = await pool.query(
+      `SELECT
+         COALESCE(SUM(
+           COALESCE(stock_main_warehouse, 0) +
+           COALESCE(stock_back_room, 0) +
+           COALESCE(stock_show_room, 0)
+         ), 0)::float AS current_stock_units
+       FROM products`
+    );
+
+    const soldResult = await pool.query(
+      `SELECT COALESCE(SUM(oi.quantity), 0)::float AS sold_units
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       WHERE UPPER(o.status) = 'DELIVERED'`
+    );
+
+    const trendResult = await pool.query(
+      `WITH months AS (
+         SELECT generate_series(
+           date_trunc('month', CURRENT_DATE) - interval '5 months',
+           date_trunc('month', CURRENT_DATE),
+           interval '1 month'
+         ) AS month_start
+       )
+       SELECT
+         TO_CHAR(m.month_start, 'Mon YY') AS label,
+         COALESCE(SUM(oi.quantity), 0)::float AS sold_units
+       FROM months m
+       LEFT JOIN orders o
+         ON date_trunc('month', o.date::timestamp) = m.month_start
+        AND UPPER(o.status) = 'DELIVERED'
+       LEFT JOIN order_items oi ON oi.order_id = o.id
+       GROUP BY m.month_start
+       ORDER BY m.month_start ASC`
+    );
+
+    const currentStockUnits = Number(stockResult.rows[0]?.current_stock_units || 0);
+    const soldUnits = Number(soldResult.rows[0]?.sold_units || 0);
+    const turnover = currentStockUnits > 0 ? soldUnits / currentStockUnits : 0;
+
+    const trend = trendResult.rows.map((row: any) => {
+      const monthSoldUnits = Number(row.sold_units || 0);
+      return {
+        name: row.label,
+        val: currentStockUnits > 0 ? monthSoldUnits / currentStockUnits : 0
+      };
+    });
+
+    res.json({
+      turnover,
+      currentStockUnits,
+      soldUnits,
+      trend
+    });
+  } catch (err) {
+    console.error('Get inventory turnover metrics error:', err);
+    res.status(500).json({ error: 'Failed to fetch inventory turnover metrics' });
   }
 };

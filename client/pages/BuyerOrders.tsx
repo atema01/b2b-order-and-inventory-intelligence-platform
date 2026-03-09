@@ -22,6 +22,25 @@ const BuyerOrders: React.FC = () => {
   useEffect(() => {
     let isMounted = true;
 
+    const toBuyerProfile = (me: any): Buyer => ({
+      id: me?.id || user?.id || '',
+      companyName: me?.companyName || 'Buyer Account',
+      contactPerson: me?.name || 'Buyer',
+      email: me?.email || '',
+      phone: me?.phone || '',
+      address: '',
+      creditLimit: 0,
+      availableCredit: 0,
+      outstandingBalance: 0,
+      paymentTerms: '',
+      totalSpend: 0,
+      totalOrders: 0,
+      status: 'Active',
+      tier: me?.tier || 'Bronze',
+      discountRate: 0,
+      joinDate: ''
+    });
+
     const loadBuyerOrders = async () => {
       if (!user?.id) {
         setIsLoading(false);
@@ -32,9 +51,9 @@ const BuyerOrders: React.FC = () => {
       setError('');
 
       try {
-        const [ordersRes, buyerRes, productsRes] = await Promise.all([
+        const [ordersRes, meRes, productsRes] = await Promise.all([
           fetch('/api/orders', { credentials: 'include' }),
-          fetch(`/api/buyers/${user.id}`, { credentials: 'include' }),
+          fetch('/api/auth/me', { credentials: 'include' }),
           fetch('/api/products', { credentials: 'include' })
         ]);
 
@@ -43,7 +62,7 @@ const BuyerOrders: React.FC = () => {
         }
 
         const ordersData = await ordersRes.json();
-        const buyerData = buyerRes.ok ? await buyerRes.json() : null;
+        const meData = meRes.ok ? await meRes.json() : null;
         const productsData = productsRes.ok ? await productsRes.json() : [];
 
         const ordersArray = Array.isArray(ordersData) ? ordersData : (ordersData?.data || []);
@@ -59,7 +78,7 @@ const BuyerOrders: React.FC = () => {
         if (!isMounted) return;
 
         setOrders(buyerOrders);
-        setBuyer(buyerData);
+        setBuyer(meData ? toBuyerProfile(meData) : null);
         setProducts(productsArray);
       } catch (err) {
         console.error('Failed to load buyer orders:', err);

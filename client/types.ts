@@ -131,17 +131,14 @@ export interface BulkDiscountRule {
   isActive: boolean;
 }
 
-export interface MarginDiscountRule {
-  id: string;
-  minUnitCost: number;
-  minMarginPercentage: number;
-  bonusDiscount: number;
-  isActive: boolean;
-}
-
 export interface Order {
   id: string;
   buyerId: string;
+  buyerCompanyName?: string | null;
+  buyerName?: string | null;
+  buyerPhone?: string | null;
+  buyerEmail?: string | null;
+  buyerAddress?: string | null;
   date: string;
   status: OrderStatus;
   items: OrderItem[];
