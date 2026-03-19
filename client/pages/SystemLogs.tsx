@@ -7,6 +7,7 @@ const SystemLogs: React.FC = () => {
   const [logs, setLogs] = useState<SystemLog[]>([]);
   const [filteredLogs, setFilteredLogs] = useState<SystemLog[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [activeModule, setActiveModule] = useState('All');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -15,54 +16,53 @@ const SystemLogs: React.FC = () => {
   const [total, setTotal] = useState(0);
   const { t } = useLanguage();
 
-  useEffect(() => {
-    const fetchLogs = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const res = await fetch(`/api/system-logs?page=${page}&limit=${limit}`, { credentials: 'include' });
-        if (!res.ok) throw new Error('Failed to fetch system logs');
-        const data = await res.json();
-        if (data?.data) {
-          setLogs(data.data);
-          setFilteredLogs(data.data);
-          setTotal(data.total || 0);
-        } else {
-          setLogs(data);
-          setFilteredLogs(data);
-          setTotal(data?.length || 0);
-        }
-      } catch (err) {
-        console.error('Fetch system logs error:', err);
-        setError(err instanceof Error ? err.message : 'An unexpected error occurred');
-      } finally {
-        setLoading(false);
+  const fetchLogs = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: String(limit),
+      });
+
+      if (activeModule && activeModule !== 'All') params.set('module', activeModule);
+      if (debouncedSearchQuery) params.set('search', debouncedSearchQuery);
+
+      const res = await fetch(`/api/system-logs?${params.toString()}`, { credentials: 'include' });
+      if (!res.ok) throw new Error('Failed to fetch system logs');
+      const data = await res.json();
+      if (data?.data) {
+        setLogs(data.data);
+        setFilteredLogs(data.data);
+        setTotal(data.total || 0);
+      } else {
+        setLogs(data);
+        setFilteredLogs(data);
+        setTotal(data?.length || 0);
       }
-    };
-
-    fetchLogs();
-  }, [page, limit]);
+    } catch (err) {
+      console.error('Fetch system logs error:', err);
+      setError(err instanceof Error ? err.message : 'An unexpected error occurred');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    let result = logs;
-    
-    // Filter by Module
-    if (activeModule !== 'All') {
-      result = result.filter(log => log.module === activeModule);
-    }
+    const handle = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [searchQuery]);
 
-    // Filter by Search
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      result = result.filter(log => 
-        log.action.toLowerCase().includes(q) || 
-        log.details.toLowerCase().includes(q) ||
-        log.actorName.toLowerCase().includes(q)
-      );
-    }
+  useEffect(() => {
+    fetchLogs();
+  }, [page, limit, activeModule, debouncedSearchQuery]);
 
-    setFilteredLogs(result);
-  }, [searchQuery, activeModule, logs]);
+  useEffect(() => {
+    setPage(1);
+  }, [activeModule, debouncedSearchQuery]);
 
   const getModuleColor = (module: string) => {
     switch(module) {
@@ -94,17 +94,6 @@ const SystemLogs: React.FC = () => {
     { id: 'Settings', label: t('log.module.settings') }
   ];
 
-  if (loading) {
-    return (
-      <div className="p-4 lg:p-8 flex items-center justify-center min-h-[50vh]">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-slate-600">Loading system logs...</p>
-        </div>
-      </div>
-    );
-  }
-
   if (error) {
     return (
       <div className="p-4 lg:p-8 max-w-7xl mx-auto">
@@ -129,27 +118,12 @@ const SystemLogs: React.FC = () => {
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
           <div>
             <h1 className="text-xl lg:text-2xl font-black text-slate-800 tracking-tight">{t('logs.title')}</h1>
-            <p className="text-[10px] lg:text-sm text-gray-500 font-medium uppercase tracking-widest">{logs.length} {t('logs.eventsRecorded')}</p>
+            <p className="text-[10px] lg:text-sm text-gray-500 font-medium uppercase tracking-widest">{total} {t('logs.eventsRecorded')}</p>
           </div>
           
           <button 
             onClick={async () => {
-                try {
-                  const res = await fetch(`/api/system-logs?page=${page}&limit=${limit}`, { credentials: 'include' });
-                  if (!res.ok) throw new Error('Failed to fetch system logs');
-                  const updated = await res.json();
-                  if (updated?.data) {
-                    setLogs(updated.data);
-                    setFilteredLogs(updated.data);
-                    setTotal(updated.total || 0);
-                  } else {
-                    setLogs(updated);
-                    setFilteredLogs(updated);
-                    setTotal(updated?.length || 0);
-                  }
-                } catch (err) {
-                  console.error('Refresh system logs error:', err);
-                }
+                await fetchLogs();
             }}
             className="p-2 text-slate-400 hover:text-primary transition-colors"
             title={t('logs.refresh')}
@@ -190,7 +164,12 @@ const SystemLogs: React.FC = () => {
 
       {/* Log List */}
       <div className="bg-white rounded-[32px] border border-gray-100 shadow-sm overflow-hidden">
-        {filteredLogs.length === 0 ? (
+        {loading ? (
+            <div className="p-16 text-center text-gray-400">
+                <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-primary mx-auto mb-3"></div>
+                <p className="text-xs font-bold uppercase tracking-widest">Loading system logs...</p>
+            </div>
+        ) : filteredLogs.length === 0 ? (
             <div className="p-16 text-center text-gray-400">
                 <span className="material-symbols-outlined text-5xl mb-2 opacity-20">history_edu</span>
                 <p className="text-xs font-bold uppercase tracking-widest">{t('logs.noLogs')}</p>

@@ -30,6 +30,16 @@ dotenv.config();
 // Initialize Express app
 const app = express();
 const PORT = process.env.PORT || 5000;
+const isProduction = process.env.NODE_ENV === 'production';
+const allowedOrigins = (process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+if (!isProduction) {
+  allowedOrigins.push('http://localhost:3000');
+  allowedOrigins.push('http://localhost:5173');
+}
 
 // ======================
 // Middleware Setup
@@ -37,12 +47,16 @@ const PORT = process.env.PORT || 5000;
 
 // Security: Sets various HTTP headers to protect against common attacks
 app.use(helmet());
+app.set('trust proxy', 1);
 
 // Enable CORS: Allows your React frontend (on :5173) to call this backend
 app.use(cors({
-  origin: process.env.NODE_ENV === 'development' 
-    ? 'http://localhost:3000' // Vite default
-    : 'https://yourdomain.com', // Later: your production domain
+  origin: (origin, callback) => {
+    // Allow server-to-server, health checks, and same-origin requests with no origin header.
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
   credentials: true, // Needed if using cookies (we will)
 }));
 

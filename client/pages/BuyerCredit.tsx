@@ -86,33 +86,10 @@ const BuyerCredit: React.FC = () => {
     <div className="p-4 lg:p-8 max-w-5xl mx-auto space-y-8 pb-32">
       <div className="space-y-1">
         <h1 className="text-2xl lg:text-3xl font-black text-slate-900 tracking-tight">{t('nav.financials')}</h1>
-        <p className="text-slate-500 font-medium">Track your credit requests and outstanding payments.</p>
+        <p className="text-slate-500 font-medium">Track your credit requests and account terms.</p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8">
-        {/* Outstanding Balance Card */}
-        <div className="bg-slate-900 rounded-[40px] p-8 lg:p-10 shadow-2xl text-white relative overflow-hidden flex flex-col justify-between min-h-[260px]">
-          <div className="absolute top-0 right-0 w-64 h-64 bg-[#00A3C4]/20 blur-3xl rounded-full -mr-10 -mt-10"></div>
-          
-          <div className="relative z-10 flex justify-between items-start">
-            <div className="size-12 rounded-2xl bg-white/10 flex items-center justify-center backdrop-blur-md border border-white/10">
-               <span className="material-symbols-outlined text-2xl">account_balance</span>
-            </div>
-            <div className="text-right">
-                <p className="text-xs font-bold text-white/60 uppercase tracking-widest mb-1">{t('common.status')}</p>
-                <span className="inline-block px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-black uppercase tracking-wider border border-emerald-500/30">
-                   Active
-                </span>
-            </div>
-          </div>
-
-          <div className="relative z-10 space-y-1">
-             <p className="text-xs font-bold text-white/60 uppercase tracking-widest">Total Outstanding Balance</p>
-             <p className="text-4xl font-black">ETB {buyer.outstandingBalance.toLocaleString()}</p>
-             <p className="text-[10px] font-medium text-white/40 pt-2">Includes all approved credit financing currently unpaid.</p>
-          </div>
-        </div>
-
+      <div className="grid grid-cols-1 gap-6 lg:gap-8">
         {/* Account Details */}
         <div className="bg-white rounded-[32px] p-8 border border-gray-100 shadow-sm space-y-6">
             <h3 className="text-lg font-black text-slate-900">Account Terms</h3>
