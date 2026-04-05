@@ -18,6 +18,7 @@ const LogCredit: React.FC = () => {
     orderId: '',
     amount: 0,
     reason: 'Return' as any,
+    paymentTerms: 'Net 15',
     notes: ''
   });
 
@@ -86,6 +87,7 @@ const LogCredit: React.FC = () => {
           orderId: form.orderId || null,
           amount: form.amount,
           reason: form.reason,
+          paymentTerms: form.paymentTerms,
           notes: form.notes
         })
       });
@@ -243,6 +245,21 @@ const LogCredit: React.FC = () => {
                     </select>
                     <span className="absolute right-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-gray-400 pointer-events-none">expand_more</span>
                   </div>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Repayment Terms</label>
+                <div className="relative">
+                  <select
+                    className="w-full bg-gray-50 border-transparent rounded-2xl px-5 py-4 font-bold text-slate-800 focus:ring-2 focus:ring-amber-200 focus:border-amber-500 focus:bg-white transition-all shadow-inner appearance-none"
+                    value={form.paymentTerms}
+                    onChange={(e) => setForm({ ...form, paymentTerms: e.target.value })}
+                  >
+                    <option value="Net 15">15 Days</option>
+                    <option value="Net 30">30 Days</option>
+                  </select>
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-gray-400 pointer-events-none">expand_more</span>
                 </div>
               </div>
 

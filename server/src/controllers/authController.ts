@@ -147,10 +147,14 @@ export const register = async (req: Request, res: Response) => {
  * Authenticates user and sets HttpOnly cookie with JWT
  */
 export const login = async (req: Request, res: Response) => {
-  const { email, password } = req.body;
+  const { email, password, accountType } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password required' });
+  }
+
+  if (accountType !== 'buyer' && accountType !== 'seller') {
+    return res.status(400).json({ error: 'accountType must be buyer or seller' });
   }
 
   try {
@@ -166,6 +170,15 @@ export const login = async (req: Request, res: Response) => {
     const user = result.rows[0];
     if (user.status !== 'Active') {
       return res.status(401).json({ error: 'Account is inactive' });
+    }
+
+    const isBuyerAccount = user.role_id === 'R-BUYER';
+    if (accountType === 'buyer' && !isBuyerAccount) {
+      return res.status(403).json({ error: 'This account must use the seller login.' });
+    }
+
+    if (accountType === 'seller' && isBuyerAccount) {
+      return res.status(403).json({ error: 'This account must use the buyer login.' });
     }
 
     const isValid = await comparePassword(password, user.password_hash);

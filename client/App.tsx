@@ -44,6 +44,7 @@ import BuyerDashboard from './pages/BuyerDashboard';
 import BuyerCatalog from './pages/BuyerCatalog';
 import BuyerProductDetails from './pages/BuyerProductDetails';
 import BuyerCredit from './pages/BuyerCredit';
+import BuyerCreditDetails from './pages/BuyerCreditDetails';
 import BuyerOrders from './pages/BuyerOrders';
 import BuyerOrderDetails from './pages/BuyerOrderDetails';
 import BuyerPayment from './pages/BuyerPayment';
@@ -123,6 +124,7 @@ const RootRouter: React.FC = () => {
           <Route path="/orders/:id" element={<BuyerOrderDetails />} />
             <Route path="/products/:id" element={<ProductDetails />} />  {/* ← This must exist */}
           <Route path="/credit" element={<BuyerCredit />} />
+          <Route path="/credit/:id" element={<BuyerCreditDetails />} />
           <Route path="/notifications" element={<BuyerNotifications />} />
           <Route path="/payment/:orderId" element={<BuyerPayment />} />
           <Route path="/settings" element={<Settings />} />

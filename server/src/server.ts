@@ -22,6 +22,7 @@ import permissionRoutes from './routes/permissionRoutes';
 import creditRoutes from './routes/creditRoutes';
 import paymentRoutes from './routes/paymentRoutes';
 import pricingRoutes from './routes/pricingRoutes';
+import { ensureFinanceSchema } from './utils/ensureFinanceSchema';
 
 
 // Load environment variables
@@ -115,7 +116,19 @@ app.get('/api/test-db', async (req, res) => {
 // Start Server
 // ======================
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📡 Health check: http://localhost:${PORT}/api`);
-});
+const startServer = async () => {
+  try {
+    await ensureFinanceSchema();
+    console.log('Finance schema verified');
+
+    app.listen(PORT, () => {
+      console.log(`🚀 Server running on http://localhost:${PORT}`);
+      console.log(`📡 Health check: http://localhost:${PORT}/api`);
+    });
+  } catch (err) {
+    console.error('Failed to verify finance schema:', err);
+    process.exit(1);
+  }
+};
+
+startServer();

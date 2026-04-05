@@ -1,6 +1,6 @@
 ﻿
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Product } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import LoadingState from '../components/LoadingState';
@@ -9,10 +9,12 @@ import { addToCart as addToCartStore } from '../services/cartStore';
 const BuyerProductDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const { t } = useLanguage();
   const [product, setProduct] = useState<Product | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
+  const query = new URLSearchParams(location.search).get('q')?.trim().toLowerCase() || '';
 
   useEffect(() => {
     let isMounted = true;
@@ -62,6 +64,14 @@ const BuyerProductDetails: React.FC = () => {
   }
   if (!product) return <div className="p-8 text-center text-gray-400 font-bold">Product not found.</div>;
 
+  const pageMatches = !query || [
+    product.name,
+    product.brand,
+    product.sku,
+    product.description,
+    product.category
+  ].join(' ').toLowerCase().includes(query);
+
   const totalStock = product.stock.mainWarehouse + product.stock.backRoom + product.stock.showRoom;
   const isOutOfStock = totalStock === 0;
   const isLowStock = totalStock > 0 && totalStock < product.reorderPoint;
@@ -77,6 +87,13 @@ const BuyerProductDetails: React.FC = () => {
         </button>
         <h1 className="text-xl font-black text-slate-900">Product Details</h1>
       </div>
+
+      {!pageMatches ? (
+        <div className="rounded-[32px] border border-gray-100 bg-white p-12 text-center text-slate-400 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-widest">No matching content on this page</p>
+        </div>
+      ) : (
+      <>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
         <div className="aspect-square bg-white rounded-[40px] border border-gray-100 shadow-sm overflow-hidden relative">
@@ -135,6 +152,8 @@ const BuyerProductDetails: React.FC = () => {
            </button>
          </div>
       </div>
+      </>
+      )}
     </div>
   );
 };

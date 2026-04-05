@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Payment, Order, PaymentStatus } from '../types';
+import { CreditRequest, Payment, Order, PaymentStatus } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 
 const PaymentReview: React.FC = () => {
@@ -10,6 +10,7 @@ const PaymentReview: React.FC = () => {
   const { t } = useLanguage();
   const [payment, setPayment] = useState<Payment | null>(null);
   const [order, setOrder] = useState<Order | null>(null);
+  const [credit, setCredit] = useState<CreditRequest | null>(null);
   const [notes, setNotes] = useState('');
   const [selectedStatus, setSelectedStatus] = useState<PaymentStatus>(PaymentStatus.PENDING);
   const [isEditingStatus, setIsEditingStatus] = useState(false);
@@ -31,12 +32,18 @@ const PaymentReview: React.FC = () => {
         }
         const paymentData = await paymentRes.json();
 
+        const [orderRes, creditRes] = await Promise.all([
+          paymentData?.orderId ? fetch(`/api/orders/${paymentData.orderId}`, { credentials: 'include' }) : Promise.resolve(null),
+          paymentData?.creditRequestId ? fetch(`/api/credits/${paymentData.creditRequestId}`, { credentials: 'include' }) : Promise.resolve(null)
+        ]);
+
         let orderData: Order | null = null;
-        if (paymentData?.orderId) {
-          const orderRes = await fetch(`/api/orders/${paymentData.orderId}`, { credentials: 'include' });
-          if (orderRes.ok) {
-            orderData = await orderRes.json();
-          }
+        let creditData: CreditRequest | null = null;
+        if (orderRes?.ok) {
+          orderData = await orderRes.json();
+        }
+        if (creditRes?.ok) {
+          creditData = await creditRes.json();
         }
 
         if (!isMounted) return;
@@ -44,6 +51,7 @@ const PaymentReview: React.FC = () => {
         setNotes(paymentData?.notes || '');
         setSelectedStatus((paymentData?.status as PaymentStatus) || PaymentStatus.PENDING);
         setOrder(orderData);
+        setCredit(creditData);
       } catch (err) {
         console.error('Load payment error:', err);
         if (isMounted) {
@@ -90,6 +98,8 @@ const PaymentReview: React.FC = () => {
   }
 
   if (!payment) return <div className="p-8">Payment not found.</div>;
+  const isCreditRepayment = Boolean(payment.creditRequestId);
+  const expectedAmount = isCreditRepayment ? (credit?.outstandingAmount || credit?.approvedAmount || payment.amount) : order?.total;
 
   const handleAction = async (status: PaymentStatus) => {
     if (!payment) return;
@@ -146,7 +156,7 @@ const PaymentReview: React.FC = () => {
             <div className="grid grid-cols-2 gap-6">
               <div className="space-y-1">
                 <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('payments.expected')}</p>
-                <p className="text-xl font-black text-slate-800">ETB {order?.total.toLocaleString() || '---'}</p>
+                <p className="text-xl font-black text-slate-800">ETB {expectedAmount?.toLocaleString() || '---'}</p>
               </div>
               <div className="space-y-1">
                 <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('payments.reported')}</p>
@@ -162,7 +172,17 @@ const PaymentReview: React.FC = () => {
               </div>
             </div>
 
-            {order?.total !== payment.amount && (
+            {isCreditRepayment && credit && (
+              <div className="rounded-2xl bg-cyan-50 border border-cyan-100 p-4">
+                <p className="text-[10px] font-black uppercase tracking-widest text-cyan-600">Linked Credit</p>
+                <p className="mt-2 text-sm font-black text-slate-800">{credit.id}</p>
+                <p className="mt-1 text-xs font-medium text-slate-600">
+                  Status: {credit.status} • Approved: ETB {(credit.approvedAmount || 0).toLocaleString()} • Outstanding: ETB {(credit.outstandingAmount || 0).toLocaleString()}
+                </p>
+              </div>
+            )}
+
+            {!isCreditRepayment && order?.total !== payment.amount && (
               <div className="bg-red-50 border border-red-100 rounded-2xl p-4 flex items-start gap-3">
                 <span className="material-symbols-outlined text-red-600">warning</span>
                 <div>

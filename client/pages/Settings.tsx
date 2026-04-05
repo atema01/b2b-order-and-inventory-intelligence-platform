@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { Category, Staff, Buyer, StorageLocation } from '../types';
@@ -7,9 +8,8 @@ import { DEFAULT_STORAGE_LOCATIONS, fetchStorageLocations, normalizeStorageLocat
 const Settings: React.FC = () => {
   const { language, setLanguage, t } = useLanguage();
   const { user } = useAuth();
+  const location = useLocation();
   const permissions = user?.permissions || {};
-  const [emailNotifs, setEmailNotifs] = useState(true);
-  const [pushNotifs, setPushNotifs] = useState(false);
   const isBuyer = user?.role === 'Buyer';
   const isAdmin = user?.role === 'Admin';
   const canManageProductsSettings = !isBuyer && (isAdmin || Boolean(permissions['Products']));
@@ -40,6 +40,12 @@ const Settings: React.FC = () => {
   const [currentPwd, setCurrentPwd] = useState('');
   const [newPwd, setNewPwd] = useState('');
   const [pwdError, setPwdError] = useState('');
+  const query = new URLSearchParams(location.search).get('q')?.trim().toLowerCase() || '';
+
+  const matchesSection = (...values: string[]) => {
+    if (!query) return true;
+    return values.join(' ').toLowerCase().includes(query);
+  };
 
 useEffect(() => {
   if (canManageProductsSettings) {
@@ -293,7 +299,7 @@ const handleProfileUpdate = async (e: React.FormEvent) => {
         </div>
 
         {/* Financial Settings - For Admins or Staff with Credits/Payments Access */}
-        {canManageFinancials && (
+        {canManageFinancials && matchesSection('financial settings tax vat rate prices orders') && (
             <section className="bg-white rounded-[32px] p-8 border border-gray-100 shadow-sm space-y-6">
                 <div className="flex items-center gap-3 border-b border-gray-50 pb-4">
                     <span className="material-symbols-outlined text-primary text-xl">account_balance</span>
@@ -327,7 +333,7 @@ const handleProfileUpdate = async (e: React.FormEvent) => {
         )}
 
         {/* Product Categories - Only for Sellers */}
-        {canManageProductsSettings && (
+        {canManageProductsSettings && matchesSection('categories product categories manage categories add category delete category') && (
             <section className="bg-white rounded-[32px] p-8 border border-gray-100 shadow-sm space-y-6">
                 <div className="flex items-center gap-3 border-b border-gray-50 pb-4">
                     <span className="material-symbols-outlined text-primary text-xl">category</span>
@@ -397,7 +403,7 @@ const handleProfileUpdate = async (e: React.FormEvent) => {
         )}
 
         {/* Storage Locations - For users with Products access */}
-        {canManageLocations && (
+        {canManageLocations && matchesSection('storage locations warehouse capacity units location name') && (
             <section className="bg-white rounded-[32px] p-8 border border-gray-100 shadow-sm space-y-6">
                 <div className="flex items-center gap-3 border-b border-gray-50 pb-4">
                     <span className="material-symbols-outlined text-primary text-xl">warehouse</span>
@@ -458,6 +464,7 @@ const handleProfileUpdate = async (e: React.FormEvent) => {
         )}
 
         {/* Localization */}
+        {matchesSection('profile settings company name full name email phone profile') && (
         <section className="bg-white rounded-[32px] p-8 border border-gray-100 shadow-sm space-y-6">
             <div className="flex items-center gap-3 border-b border-gray-50 pb-4">
                 <span className="material-symbols-outlined text-primary text-xl">account_circle</span>
@@ -521,7 +528,9 @@ const handleProfileUpdate = async (e: React.FormEvent) => {
                 </div>
             </form>
         </section>
+        )}
 
+        {matchesSection('language localization english amharic locale') && (
         <section className="bg-white rounded-[32px] p-8 border border-gray-100 shadow-sm space-y-6">
             <div className="flex items-center gap-3 border-b border-gray-50 pb-4">
                 <span className="material-symbols-outlined text-primary text-xl">language</span>
@@ -545,43 +554,10 @@ const handleProfileUpdate = async (e: React.FormEvent) => {
                 </div>
             </div>
         </section>
-
-        {/* Notifications */}
-        <section className="bg-white rounded-[32px] p-8 border border-gray-100 shadow-sm space-y-6">
-            <div className="flex items-center gap-3 border-b border-gray-50 pb-4">
-                <span className="material-symbols-outlined text-primary text-xl">notifications</span>
-                <h2 className="text-lg font-black text-slate-800">{t('settings.notifications')}</h2>
-            </div>
-
-            <div className="space-y-4">
-                <div className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl">
-                    <div className="space-y-0.5">
-                        <p className="font-bold text-slate-800">{t('settings.emailAlerts')}</p>
-                        <p className="text-xs text-gray-500 font-medium">{t('settings.emailDesc')}</p>
-                    </div>
-                    <button 
-                        onClick={() => setEmailNotifs(!emailNotifs)}
-                        className={`w-12 h-7 rounded-full p-1 transition-all ${emailNotifs ? 'bg-primary' : 'bg-gray-300'}`}
-                    >
-                        <div className={`size-5 bg-white rounded-full shadow-md transition-all ${emailNotifs ? 'translate-x-5' : 'translate-x-0'}`}></div>
-                    </button>
-                </div>
-                <div className="flex items-center justify-between p-4 bg-gray-50 rounded-2xl">
-                    <div className="space-y-0.5">
-                        <p className="font-bold text-slate-800">{t('settings.pushNotifs')}</p>
-                        <p className="text-xs text-gray-500 font-medium">{t('settings.pushDesc')}</p>
-                    </div>
-                    <button 
-                        onClick={() => setPushNotifs(!pushNotifs)}
-                        className={`w-12 h-7 rounded-full p-1 transition-all ${pushNotifs ? 'bg-primary' : 'bg-gray-300'}`}
-                    >
-                        <div className={`size-5 bg-white rounded-full shadow-md transition-all ${pushNotifs ? 'translate-x-5' : 'translate-x-0'}`}></div>
-                    </button>
-                </div>
-            </div>
-        </section>
+        )}
 
         {/* Account Security */}
+        {matchesSection('security password change password account security') && (
         <section className="bg-white rounded-[32px] p-8 border border-gray-100 shadow-sm space-y-6">
             <div className="flex items-center gap-3 border-b border-gray-50 pb-4">
                 <span className="material-symbols-outlined text-primary text-xl">lock</span>
@@ -601,6 +577,7 @@ const handleProfileUpdate = async (e: React.FormEvent) => {
                 </button>
             </div>
         </section>
+        )}
 
         {/* Change Password Modal */}
         {isChangePwdOpen && (

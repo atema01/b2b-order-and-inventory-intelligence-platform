@@ -4,8 +4,22 @@ import { useNavigate } from 'react-router-dom';
 import { Notification } from '../types';
 import LoadingState from '../components/LoadingState';
 
+type NotificationFilter = 'New' | 'All' | 'Order' | 'Payment' | 'Credit' | 'Inventory' | 'System';
+
+const getNotificationCategory = (notif: Notification): Exclude<NotificationFilter, 'All' | 'New'> => {
+  const text = `${notif.title} ${notif.message}`.toLowerCase();
+  if (notif.relatedId?.startsWith('CR-') || text.includes('credit')) return 'Credit';
+  if (notif.type === 'Order') return 'Order';
+  if (notif.type === 'Payment') return 'Payment';
+  if (notif.type === 'Stock' || text.includes('inventory') || text.includes('stock') || text.includes('return')) return 'Inventory';
+  return 'System';
+};
+
+const FILTER_PRIORITY: NotificationFilter[] = ['New', 'All', 'Order', 'Payment', 'Credit', 'Inventory', 'System'];
+
 const Notifications: React.FC = () => {
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [activeFilter, setActiveFilter] = useState<NotificationFilter>('New');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const navigate = useNavigate();
@@ -49,16 +63,25 @@ const Notifications: React.FC = () => {
     }
   };
 
-  const handleNotificationClick = async (notif: Notification) => {
+  const handleMarkRead = async (notif: Notification) => {
+    if (notif.isRead) return;
     try {
-      await fetch(`/api/notifications/${notif.id}`, {
-        method: 'DELETE',
+      const res = await fetch(`/api/notifications/${notif.id}/read`, {
+        method: 'POST',
         credentials: 'include'
       });
-      setNotifications(prev => prev.filter(n => n.id !== notif.id));
+      if (!res.ok) throw new Error('Failed to mark notification read');
+      setNotifications(prev =>
+        prev.map((item) => (item.id === notif.id ? { ...item, isRead: true } : item))
+      );
     } catch (err) {
-      console.error('Delete notification error:', err);
+      console.error('Mark notification read error:', err);
+      alert('Failed to mark notification as read.');
     }
+  };
+
+  const handleNotificationClick = async (notif: Notification) => {
+    await handleMarkRead(notif);
 
     if (!notif.relatedId) return;
 
@@ -76,6 +99,18 @@ const Notifications: React.FC = () => {
     }
   };
 
+  const availableCategoryFilters = Array.from(
+    new Set(notifications.map((notif) => getNotificationCategory(notif)))
+  ) as Exclude<NotificationFilter, 'All' | 'New'>[];
+  const filters = FILTER_PRIORITY.filter(
+    (filter) => filter === 'New' || filter === 'All' || availableCategoryFilters.includes(filter as Exclude<NotificationFilter, 'All' | 'New'>)
+  );
+  const filteredNotifications = notifications.filter((notif) => {
+    if (activeFilter === 'New') return !notif.isRead;
+    if (activeFilter === 'All') return true;
+    return getNotificationCategory(notif) === activeFilter;
+  });
+
   return (
     <div className="p-0 sm:p-4 lg:p-8 max-w-2xl mx-auto divide-y divide-gray-100 bg-white sm:bg-transparent min-h-screen">
       <div className="hidden sm:flex justify-between items-center mb-6 px-1">
@@ -90,14 +125,31 @@ const Notifications: React.FC = () => {
         )}
       </div>
 
+      <div className="mb-4 flex gap-2 overflow-x-auto px-4 pb-2 sm:px-1">
+        {filters.map((filter) => (
+          <button
+            key={filter}
+            type="button"
+            onClick={() => setActiveFilter(filter)}
+            className={`rounded-2xl border px-4 py-2 text-[11px] font-black uppercase tracking-widest transition-all ${
+              activeFilter === filter
+                ? 'border-primary bg-primary text-white shadow-lg shadow-primary/20'
+                : 'border-gray-200 bg-white text-slate-500 hover:border-gray-300'
+            }`}
+          >
+            {filter === 'New' ? `New Messages (${notifications.filter((notif) => !notif.isRead).length})` : filter}
+          </button>
+        ))}
+      </div>
+
       <div className="bg-white rounded-none sm:rounded-3xl border-0 sm:border border-gray-100 overflow-hidden shadow-sm">
         {isLoading ? (
           <LoadingState message="Loading notifications..." />
         ) : error ? (
           <div className="p-12 text-center text-red-600 font-semibold">{error}</div>
-        ) : notifications.length > 0 ? (
+        ) : filteredNotifications.length > 0 ? (
           <div className="divide-y divide-gray-50">
-            {notifications.map((notif) => (
+            {filteredNotifications.map((notif) => (
               <div 
                 key={notif.id} 
                 onClick={() => handleNotificationClick(notif)}
@@ -118,6 +170,23 @@ const Notifications: React.FC = () => {
                     <span className="text-[10px] font-bold text-gray-400 whitespace-nowrap">{notif.time}</span>
                   </div>
                   <p className="text-xs text-slate-600 leading-snug">{notif.message}</p>
+                  <div className="flex items-center justify-between gap-3 pt-2">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                      {getNotificationCategory(notif)}
+                    </span>
+                    {!notif.isRead && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleMarkRead(notif);
+                        }}
+                        className="text-[10px] font-black uppercase tracking-widest text-primary hover:underline"
+                      >
+                        Mark as read
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
@@ -127,7 +196,9 @@ const Notifications: React.FC = () => {
             <div className="size-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4 text-gray-300">
                <span className="material-symbols-outlined text-4xl">notifications_off</span>
             </div>
-            <p className="text-gray-400 font-bold uppercase tracking-widest text-xs">No notifications</p>
+            <p className="text-gray-400 font-bold uppercase tracking-widest text-xs">
+              {activeFilter === 'New' ? 'No new messages' : `No ${activeFilter.toLowerCase()} notifications`}
+            </p>
           </div>
         )}
         

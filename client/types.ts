@@ -78,10 +78,15 @@ export interface CreditRequest {
   orderId?: string;
   amount: number;
   approvedAmount?: number;
+  repaidAmount?: number;
+  outstandingAmount?: number;
   reason: 'Damaged Goods' | 'Pricing Error' | 'Return' | 'Shortage' | 'Goodwill' | 'Order Financing';
-  status: 'Pending' | 'Approved' | 'Rejected' | 'Partially Approved';
+  status: 'Pending' | 'Approved' | 'Rejected' | 'Partially Approved' | 'Partially Paid' | 'Fully Paid';
   requestDate: string;
   actionDate?: string;
+  paymentTerms?: string;
+  dueDate?: string;
+  repaidAt?: string;
   notes?: string;
 }
 
@@ -161,6 +166,7 @@ export interface Payment {
   id: string;
   orderId: string;
   buyerId: string;
+  creditRequestId?: string;
   amount: number;
   method: string;
   referenceId: string;

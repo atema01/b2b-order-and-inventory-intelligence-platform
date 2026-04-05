@@ -90,12 +90,11 @@ const login = async (
   try {
     setIsLoading(true);
 
-    const backendRole = type === 'buyer' ? 'buyer' : 'staff';
     const response = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ email: identifier, password }),
+      body: JSON.stringify({ email: identifier, password, accountType: type }),
     });
 
     if (!response.ok) {

@@ -180,7 +180,7 @@ const Dashboard: React.FC = () => {
 
   const stats = [
     { label: t('dash.invValue'), value: `ETB ${(totalInventoryValue / 1000000).toFixed(1)}M`, trend: '+2.1%', up: true },
-    { label: t('dash.totalSkus'), value: totalSKUs.toLocaleString(), trend: '+0.5%', up: true },
+    { label: t('dash.totalSkus'), value: totalSKUs.toLocaleString(), trend: '+0.7%', up: true },
     { label: t('dash.onOrder'), value: itemsOnOrder.toLocaleString(), trend: '-1.2%', up: false },
     { label: t('dash.sellThrough'), value: `${sellThroughRateVal}%`, trend: '+1.8%', up: true },
   ];

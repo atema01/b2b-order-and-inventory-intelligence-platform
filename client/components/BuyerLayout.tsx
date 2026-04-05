@@ -133,6 +133,13 @@ const BuyerLayout: React.FC<BuyerLayoutProps> = ({ children, onLogout }) => {
     { label: t('nav.financials'), path: '/credit', icon: 'account_balance_wallet' },
   ];
 
+  const getMobileTitle = () => {
+    if (location.pathname.startsWith('/credit/')) return 'Credit Details';
+    if (location.pathname === '/notifications') return 'Notifications';
+    if (location.pathname === '/settings') return t('nav.settings');
+    return navItems.find((item) => location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(`${item.path}/`)))?.label || 'B2B Intel';
+  };
+
   return (
     <div className="min-h-screen bg-[#FAFAFA] font-sans text-slate-900 flex">
       {/* Mobile Sidebar Overlay */}
@@ -179,19 +186,24 @@ const BuyerLayout: React.FC<BuyerLayoutProps> = ({ children, onLogout }) => {
           </div>
           <nav className="space-y-1">
             {navItems.map(item => (
+              (() => {
+                const isActive = location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(`${item.path}/`));
+                return (
               <button
                 key={item.path}
                 onClick={() => { navigate(item.path); setIsMobileMenuOpen(false); }}
                 className={`
                   w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all group
-                  ${location.pathname === item.path 
+                  ${isActive
                     ? 'bg-[#E0F7FA] text-[#00839E] shadow-sm' 
                     : 'text-slate-500 hover:bg-gray-50 hover:text-slate-900'}
                 `}
               >
-                <span className={`material-symbols-outlined ${location.pathname === item.path ? '' : 'group-hover:text-[#00A3C4]'}`}>{item.icon}</span>
+                <span className={`material-symbols-outlined ${isActive ? '' : 'group-hover:text-[#00A3C4]'}`}>{item.icon}</span>
                 {item.label}
               </button>
+                );
+              })()
             ))}
           </nav>
 
@@ -226,15 +238,10 @@ const BuyerLayout: React.FC<BuyerLayoutProps> = ({ children, onLogout }) => {
                 <span className="material-symbols-outlined text-2xl">menu</span>
               </button>
               
-              {/* Context Title (Mobile) or Search (Desktop) */}
+              {/* Context Title */}
               <h2 className="lg:hidden font-black text-lg text-slate-800">
-                {navItems.find(i => i.path === location.pathname)?.label || (location.pathname === '/notifications' ? 'Notifications' : location.pathname === '/settings' ? t('nav.settings') : 'B2B Intel')}
+                {getMobileTitle()}
               </h2>
-
-              <div className="hidden md:flex items-center bg-gray-100/50 rounded-xl px-4 py-2.5 w-80 focus-within:ring-2 focus-within:ring-[#00A3C4]/20 focus-within:bg-white transition-all">
-                 <span className="material-symbols-outlined text-gray-400 text-xl">search</span>
-                 <input type="text" placeholder={t('common.search')} className="bg-transparent border-none outline-none text-sm font-bold text-slate-700 placeholder:text-gray-400 w-full ml-2" />
-              </div>
             </div>
 
             <div className="flex items-center gap-3 lg:gap-6">

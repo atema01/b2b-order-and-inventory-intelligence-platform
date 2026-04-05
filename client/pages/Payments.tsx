@@ -87,15 +87,15 @@ const Payments: React.FC = () => {
   };
 
   return (
+
     <div className="p-4 lg:p-8 space-y-6 max-w-7xl mx-auto pb-32">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h1 className="text-2xl font-black text-slate-800">{t('payments.title')}</h1>
       </div>
-
       {loading && (
         <div className="py-16 text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-slate-600">Loading payments...</p>
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mx-auto mb-4"></div>
+        <p className="text-slate-600">Loading payments...</p>
         </div>
       )}
 
@@ -111,6 +111,7 @@ const Payments: React.FC = () => {
           </button>
         </div>
       )}
+
 
       {/* Filter Tabs */}
       <div className={`flex gap-2 overflow-x-auto pb-2 scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0 ${loading || error ? 'pointer-events-none opacity-60' : ''}`}>
@@ -129,7 +130,6 @@ const Payments: React.FC = () => {
           </button>
         ))}
       </div>
-
       {!loading && !error && (
       <div className="bg-white rounded-[32px] border border-gray-100 shadow-sm overflow-hidden">
         {/* Desktop View */}

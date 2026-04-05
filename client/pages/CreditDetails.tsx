@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Buyer, CreditRequest, Order } from '../types';
+import { Buyer, CreditRequest, Order, Payment } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 
 const CreditDetails: React.FC = () => {
@@ -12,6 +12,7 @@ const CreditDetails: React.FC = () => {
   const [buyer, setBuyer] = useState<Buyer | null>(null);
   const [order, setOrder] = useState<Order | null>(null);
   const [approvedAmount, setApprovedAmount] = useState<number>(0);
+  const [repaymentPayments, setRepaymentPayments] = useState<Payment[]>([]);
   const [selectedStatus, setSelectedStatus] = useState<CreditRequest['status']>('Pending');
   const [isEditingStatus, setIsEditingStatus] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
@@ -39,9 +40,10 @@ const CreditDetails: React.FC = () => {
         setApprovedAmount(reqData.approvedAmount || reqData.amount);
         setSelectedStatus(reqData.status);
 
-        const [buyerRes, orderRes] = await Promise.all([
+        const [buyerRes, orderRes, repaymentsRes] = await Promise.all([
           fetch('/api/buyers', { credentials: 'include' }),
-          reqData.orderId ? fetch(`/api/orders/${reqData.orderId}`, { credentials: 'include' }) : Promise.resolve(null)
+          reqData.orderId ? fetch(`/api/orders/${reqData.orderId}`, { credentials: 'include' }) : Promise.resolve(null),
+          fetch(`/api/payments?creditRequestId=${reqData.id}`, { credentials: 'include' })
         ]);
 
         if (!isMounted) return;
@@ -57,6 +59,13 @@ const CreditDetails: React.FC = () => {
         if (orderRes && orderRes.ok) {
           const orderData = await orderRes.json();
           setOrder(orderData);
+        }
+
+        if (repaymentsRes.ok) {
+          const repaymentData = await repaymentsRes.json();
+          setRepaymentPayments(Array.isArray(repaymentData) ? repaymentData : []);
+        } else {
+          setRepaymentPayments([]);
         }
       } catch (err) {
         console.error('Load credit request error:', err);
@@ -76,12 +85,20 @@ const CreditDetails: React.FC = () => {
 
   const refreshRequest = async () => {
     if (!id) return;
-    const reqRes = await fetch(`/api/credits/${id}`, { credentials: 'include' });
-    if (!reqRes.ok) return;
-    const reqData: CreditRequest = await reqRes.json();
-    setRequest(reqData);
-    setApprovedAmount(reqData.approvedAmount || reqData.amount);
-    setSelectedStatus(reqData.status);
+    const [reqRes, repaymentsRes] = await Promise.all([
+      fetch(`/api/credits/${id}`, { credentials: 'include' }),
+      fetch(`/api/payments?creditRequestId=${id}`, { credentials: 'include' })
+    ]);
+    if (reqRes.ok) {
+      const reqData: CreditRequest = await reqRes.json();
+      setRequest(reqData);
+      setApprovedAmount(reqData.approvedAmount || reqData.amount);
+      setSelectedStatus(reqData.status);
+    }
+    if (repaymentsRes.ok) {
+      const repaymentData = await repaymentsRes.json();
+      setRepaymentPayments(Array.isArray(repaymentData) ? repaymentData : []);
+    }
   };
 
   const submitStatus = async (status: 'Pending' | 'Approved' | 'Rejected' | 'Partially Approved', notes?: string) => {
@@ -204,6 +221,8 @@ const CreditDetails: React.FC = () => {
               <span className={`inline-block mt-1 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${
                 request.status === 'Approved' ? 'bg-emerald-100 text-emerald-700' :
                 request.status === 'Partially Approved' ? 'bg-blue-100 text-blue-700' :
+                request.status === 'Partially Paid' ? 'bg-amber-100 text-amber-700' :
+                request.status === 'Fully Paid' ? 'bg-emerald-100 text-emerald-700' :
                 request.status === 'Rejected' ? 'bg-red-100 text-red-700' :
                 'bg-amber-100 text-amber-700'
               }`}>
@@ -291,6 +310,72 @@ const CreditDetails: React.FC = () => {
           )}
         </section>
       </div>
+
+      <section className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm space-y-5">
+        <div className="flex items-center justify-between gap-3 border-b border-gray-50 pb-4">
+          <div>
+            <h2 className="text-lg font-black text-slate-800">Repayment Submissions</h2>
+            <p className="text-xs font-medium text-slate-500">Payments submitted by the buyer for this credit appear here and can be reviewed from the seller payment portal.</p>
+          </div>
+        </div>
+
+        {repaymentPayments.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-sm font-medium text-slate-500">
+            No repayment submissions yet.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {repaymentPayments.map((payment) => (
+              <button
+                key={payment.id}
+                type="button"
+                onClick={() => navigate(`/payments/${payment.id}`)}
+                className="rounded-3xl border border-slate-200 bg-slate-50 p-5 text-left transition-all hover:border-primary hover:bg-white hover:shadow-sm"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Repayment</p>
+                    <p className="mt-1 text-base font-black text-slate-900">{payment.id}</p>
+                  </div>
+                  <span className={`rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-widest ${
+                    payment.status === 'Approved' ? 'bg-emerald-100 text-emerald-700' :
+                    payment.status === 'Rejected' ? 'bg-red-100 text-red-700' :
+                    payment.status === 'Mismatched' ? 'bg-orange-100 text-orange-700' :
+                    'bg-amber-100 text-amber-700'
+                  }`}>
+                    {payment.status}
+                  </span>
+                </div>
+
+                <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Amount</p>
+                    <p className="mt-1 font-black text-primary">ETB {payment.amount.toLocaleString()}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Reference</p>
+                    <p className="mt-1 font-bold text-slate-700">{payment.referenceId || 'No reference provided'}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Submitted</p>
+                    <p className="mt-1 font-bold text-slate-700">{payment.dateTime}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Method</p>
+                    <p className="mt-1 font-bold text-slate-700">{payment.method}</p>
+                  </div>
+                </div>
+
+                {payment.notes && (
+                  <div className="mt-4 rounded-2xl bg-white p-4 text-sm font-medium text-slate-600">
+                    {payment.notes}
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* Spacer to keep last content visible above fixed action bar */}
       <div className="h-28 lg:h-32" aria-hidden="true"></div>

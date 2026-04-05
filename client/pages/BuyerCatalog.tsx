@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { Product, Order, OrderStatus, Category } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -23,11 +23,21 @@ const BuyerCatalog: React.FC = () => {
   const [cart, setCart] = useState<{ productId: string; quantity: number }[]>(() => getCart());
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [requestCredit, setRequestCredit] = useState(false);
+  const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
+  const [creditAmount, setCreditAmount] = useState('');
+  const [creditReason, setCreditReason] = useState('');
+  const [creditPaymentTerms, setCreditPaymentTerms] = useState<'Net 15' | 'Net 30'>('Net 15');
+  const [selectedCreditPercentage, setSelectedCreditPercentage] = useState<number>(100);
+  const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const [draftId, setDraftId] = useState<string | null>(null);
   const cartInitRef = useRef(false);
   
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const query = new URLSearchParams(location.search).get('q')?.trim().toLowerCase() || '';
+  const draftParam = searchParams.get('draftId');
+  const openCartParam = searchParams.get('openCart');
 
   useEffect(() => {
     let isMounted = true;
@@ -113,7 +123,7 @@ const BuyerCatalog: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [searchParams, setSearchParams, user?.id]);
+  }, [draftParam, openCartParam, setSearchParams, user?.id]);
 
   // Save Cart Effect
   useEffect(() => {
@@ -146,6 +156,10 @@ const BuyerCatalog: React.FC = () => {
 
 
   // Filtering
+  useEffect(() => {
+    setSearchQuery(query);
+  }, [query]);
+
   useEffect(() => {
     let result = products;
     if (activeCategory !== 'All') {
@@ -198,17 +212,34 @@ const BuyerCatalog: React.FC = () => {
     }, 0);
   };
 
-  const handleOrderAction = async (status: OrderStatus) => {
+  const orderSubtotal = calculateTotal();
+  const orderTax = orderSubtotal * taxRate;
+  const orderTotal = orderSubtotal + orderTax;
+  const parsedCreditAmount = Number.parseFloat(creditAmount);
+  const safeCreditAmount = Number.isFinite(parsedCreditAmount) ? parsedCreditAmount : 0;
+  const creditPercentage = orderTotal > 0 ? Math.min(100, Math.max(0, (safeCreditAmount / orderTotal) * 100)) : 0;
+
+  const applyCreditPercentage = (percentage: number) => {
+    setSelectedCreditPercentage(percentage);
+    setCreditAmount(((orderTotal * percentage) / 100).toFixed(2));
+  };
+
+  const openCreditRequestModal = () => {
+    if (orderTotal <= 0) return;
+    applyCreditPercentage(100);
+    setCreditReason('');
+    setCreditPaymentTerms('Net 15');
+    setIsCreditModalOpen(true);
+  };
+
+  const submitOrder = async (status: OrderStatus) => {
     const validItems = cart.filter(i => i.quantity > 0);
-    if (validItems.length === 0) return;
+    if (validItems.length === 0) return null;
     if (!user?.id) {
       alert('Please log in to place an order.');
-      return;
+      return null;
     }
 
-    const total = calculateTotal();
-    const finalTotal = total * (1 + taxRate);
-    
     const orderId = draftId || `ORD-${Date.now().toString().slice(-6)}`;
     const statusValue = status === OrderStatus.DRAFT ? 'Draft' : 'Pending';
     const now = new Date();
@@ -224,9 +255,9 @@ const BuyerCatalog: React.FC = () => {
         quantity: i.quantity,
         priceAtOrder: products.find(p => p.id === i.productId)?.price || 0
       })),
-      subtotal: total,
-      tax: total * taxRate, 
-      total: finalTotal,
+      subtotal: orderSubtotal,
+      tax: orderTax,
+      total: orderTotal,
       amountPaid: 0,
       paymentStatus: 'Unpaid',
       history: [{ 
@@ -252,23 +283,95 @@ const BuyerCatalog: React.FC = () => {
         throw new Error(errorData.error || 'Failed to submit order');
       }
 
+      return newOrder;
+    } catch (err) {
+      console.error('Order submission failed:', err);
+      throw err;
+    }
+  };
+
+  const handleOrderAction = async (status: OrderStatus) => {
+    try {
+      const newOrder = await submitOrder(status);
+      if (!newOrder) return;
+
       setCart([]);
       setIsCartOpen(false);
       clearCart();
       setDraftId(null);
+      setRequestCredit(false);
 
       if (status === OrderStatus.DRAFT) {
         alert('Order saved as draft.');
       } else {
-        alert(requestCredit 
-          ? `Order #${newOrder.id} placed. Credit request will be reviewed.` 
-          : `Order #${newOrder.id} placed successfully!`);
+        alert(`Order #${newOrder.id} placed successfully!`);
       }
 
       navigate('/orders');
     } catch (err) {
-      console.error('Order submission failed:', err);
       alert('Failed to submit order. Please try again.');
+    }
+  };
+
+  const handleSubmitAndRequestCredit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmedCreditReason = creditReason.trim();
+
+    if (!safeCreditAmount || safeCreditAmount <= 0) {
+      alert('Please enter a valid credit amount.');
+      return;
+    }
+
+    if (safeCreditAmount > orderTotal) {
+      alert(`Credit amount cannot exceed ETB ${orderTotal.toLocaleString()}.`);
+      return;
+    }
+
+    if (trimmedCreditReason.length > 1000) {
+      alert('Notes cannot exceed 1000 characters.');
+      return;
+    }
+
+    setIsSubmittingOrder(true);
+
+    try {
+      const newOrder = await submitOrder(OrderStatus.PENDING);
+      if (!newOrder) return;
+
+      const creditResponse = await fetch('/api/credits', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          orderId: newOrder.id,
+          amount: Number(safeCreditAmount.toFixed(2)),
+          reason: 'Order Financing',
+          notes: trimmedCreditReason
+            ? `${trimmedCreditReason} (${creditPercentage.toFixed(1)}% of order total requested)`
+            : `${creditPercentage.toFixed(1)}% of order total requested`,
+          paymentTerms: creditPaymentTerms
+        })
+      });
+
+      if (!creditResponse.ok) {
+        const errorData = await creditResponse.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to submit credit request');
+      }
+
+      setCart([]);
+      setIsCartOpen(false);
+      setIsCreditModalOpen(false);
+      clearCart();
+      setDraftId(null);
+      setRequestCredit(false);
+
+      alert(`Order #${newOrder.id} placed and credit request submitted successfully.`);
+      navigate('/credit');
+    } catch (err) {
+      console.error('Submit and request credit failed:', err);
+      alert(err instanceof Error ? err.message : 'Failed to submit order and credit request.');
+    } finally {
+      setIsSubmittingOrder(false);
     }
   };
 
@@ -449,7 +552,13 @@ const BuyerCatalog: React.FC = () => {
 
           <div className="flex flex-col gap-2">
             <button 
-              onClick={() => handleOrderAction(OrderStatus.PENDING)}
+              onClick={() => {
+                if (requestCredit) {
+                  openCreditRequestModal();
+                  return;
+                }
+                handleOrderAction(OrderStatus.PENDING);
+              }}
               className="w-full py-3.5 bg-[#00A3C4] hover:bg-[#008CA8] text-white rounded-xl font-black text-xs uppercase tracking-widest shadow-lg shadow-[#00A3C4]/20 active:scale-95 transition-all flex items-center justify-center gap-2"
             >
               {requestCredit ? 'Submit & Request Credit' : t('buyer.placeOrder')}
@@ -599,6 +708,137 @@ const BuyerCatalog: React.FC = () => {
           </div>
         </button>
       </div>
+
+      {isCreditModalOpen && (
+        <div className="fixed inset-0 z-[60] bg-slate-900/50 backdrop-blur-sm overflow-y-auto px-4 py-8 sm:py-10">
+          <div className="min-h-full flex items-start justify-center">
+            <div className="w-full max-w-lg rounded-[32px] bg-white shadow-2xl border border-white/60 overflow-hidden my-auto max-h-[calc(100vh-4rem)] flex flex-col">
+            <div className="p-8 pb-6 border-b border-slate-100">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-center gap-4">
+                  <div className="size-14 rounded-2xl bg-[#E0F7FA] text-[#00A3C4] flex items-center justify-center shrink-0">
+                    <span className="material-symbols-outlined text-2xl">credit_score</span>
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-black text-slate-900">Credit Request</h3>
+                    <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mt-1">Choose how much of this order should go on credit</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsCreditModalOpen(false)}
+                  className="size-10 rounded-xl bg-slate-100 text-slate-500 hover:bg-slate-200 transition-all flex items-center justify-center"
+                >
+                  <span className="material-symbols-outlined">close</span>
+                </button>
+              </div>
+            </div>
+
+            <form onSubmit={handleSubmitAndRequestCredit} className="p-8 space-y-6 overflow-y-auto">
+              <div className="rounded-3xl bg-slate-50 border border-slate-200 p-5">
+                <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-slate-400">
+                  <span>Order Total</span>
+                  <span>Requested Credit</span>
+                </div>
+                <div className="mt-3 flex items-end justify-between gap-4">
+                  <div>
+                    <p className="text-2xl font-black text-slate-900">ETB {orderTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+                    <p className="text-xs text-slate-500 font-medium mt-1">Tax included</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-2xl font-black text-[#00A3C4]">ETB {safeCreditAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+                    <p className="text-xs text-slate-500 font-medium mt-1">{creditPercentage.toFixed(1)}% of order total</p>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Credit Percentage</label>
+                <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[25, 50, 75, 100].map((percentage) => (
+                    <button
+                      key={percentage}
+                      type="button"
+                      onClick={() => applyCreditPercentage(percentage)}
+                      className={`rounded-2xl border px-4 py-3 text-sm font-black transition-all ${
+                        selectedCreditPercentage === percentage
+                          ? 'border-[#00A3C4] bg-[#E0F7FA] text-[#008CA8] shadow-sm'
+                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                      }`}
+                    >
+                      {percentage}%
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Custom Credit Amount (ETB)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max={orderTotal}
+                  step="0.01"
+                  value={creditAmount}
+                  onChange={(e) => {
+                    setSelectedCreditPercentage(0);
+                    setCreditAmount(e.target.value);
+                  }}
+                  className="mt-2 w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm font-bold text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
+                  placeholder="Enter custom amount"
+                />
+                <p className="mt-2 text-xs text-slate-500 font-medium">
+                  The percentage updates automatically from the amount you enter.
+                </p>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Repayment Terms</label>
+                <div className="relative mt-2">
+                  <select
+                    className="w-full appearance-none bg-slate-50 border border-slate-200 rounded-2xl p-4 pr-12 text-sm font-bold text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
+                    value={creditPaymentTerms}
+                    onChange={(e) => setCreditPaymentTerms(e.target.value as 'Net 15' | 'Net 30')}
+                  >
+                    <option value="Net 15">15 Days</option>
+                    <option value="Net 30">30 Days</option>
+                  </select>
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 pointer-events-none">expand_more</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Notes (Optional)</label>
+                <textarea
+                  rows={3}
+                  value={creditReason}
+                  onChange={(e) => setCreditReason(e.target.value)}
+                  className="mt-2 w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm font-medium text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
+                  placeholder="Add any note for this credit request"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsCreditModalOpen(false)}
+                  className="flex-1 py-3.5 bg-slate-100 text-slate-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-200 transition-all"
+                >
+                  {t('common.cancel')}
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingOrder}
+                  className="flex-[1.4] py-3.5 bg-[#00A3C4] text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-[#00A3C4]/20 hover:bg-[#008CA8] disabled:opacity-60 disabled:cursor-not-allowed transition-all"
+                >
+                  {isSubmittingOrder ? 'Submitting...' : 'Submit and Request'}
+                </button>
+              </div>
+            </form>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

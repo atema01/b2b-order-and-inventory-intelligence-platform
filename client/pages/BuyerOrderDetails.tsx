@@ -1,6 +1,6 @@
 ﻿
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Order, Product, OrderStatus } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -9,6 +9,7 @@ import LoadingState from '../components/LoadingState';
 const BuyerOrderDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const { t } = useLanguage();
   const { user } = useAuth();
   const [order, setOrder] = useState<Order | null>(null);
@@ -20,11 +21,13 @@ const BuyerOrderDetails: React.FC = () => {
   const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
   const [creditReason, setCreditReason] = useState('');
   const [creditAmount, setCreditAmount] = useState(0);
+  const [creditPaymentTerms, setCreditPaymentTerms] = useState<'Net 15' | 'Net 30'>('Net 15');
 
   // Delete/Cancel Modal State
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
+  const query = new URLSearchParams(location.search).get('q')?.trim().toLowerCase() || '';
 
   useEffect(() => {
     let isMounted = true;
@@ -139,7 +142,8 @@ const BuyerOrderDetails: React.FC = () => {
         orderId: order.id,
         amount: creditAmount,
         reason: 'Order Financing',
-        notes: creditReason
+        notes: creditReason,
+        paymentTerms: creditPaymentTerms
       })
     })
       .then(res => {
@@ -291,9 +295,28 @@ const BuyerOrderDetails: React.FC = () => {
   };
 
   const paymentPercentage = Math.min(100, ((order.amountPaid || 0) / order.total) * 100);
+  const pageMatches = !query || [
+    order.id,
+    order.date,
+    order.paymentStatus,
+    order.paymentTerms || '',
+    normalizedStatus,
+    String(order.total),
+    String(order.amountPaid || 0),
+    ...order.items.map((item) => {
+      const product = products.find((p) => p.id === item.productId);
+      return [item.productId, product?.name || '', product?.sku || '', product?.brand || ''].join(' ');
+    })
+  ].join(' ').toLowerCase().includes(query);
 
   return (
     <div className="p-4 lg:p-8 max-w-3xl mx-auto space-y-6 pb-40">
+      {!pageMatches ? (
+        <div className="rounded-[32px] border border-gray-100 bg-white p-12 text-center text-slate-400 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-widest">No matching content on this page</p>
+        </div>
+      ) : (
+      <>
       {/* Header */}
       <div className="flex items-center gap-4">
         <button 
@@ -493,6 +516,21 @@ const BuyerOrderDetails: React.FC = () => {
                  <p className="text-[10px] text-gray-400 mt-1 ml-2">Max requestable: ETB {remainingBalance.toLocaleString()}</p>
                </div>
 
+               <div>
+                 <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Repayment Terms</label>
+                 <div className="relative">
+                   <select
+                     className="w-full bg-gray-50 border-transparent rounded-2xl p-4 pr-12 text-sm font-bold text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:bg-white transition-all appearance-none"
+                     value={creditPaymentTerms}
+                     onChange={(e) => setCreditPaymentTerms(e.target.value as 'Net 15' | 'Net 30')}
+                   >
+                     <option value="Net 15">15 Days</option>
+                     <option value="Net 30">30 Days</option>
+                   </select>
+                   <span className="absolute right-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-gray-400 pointer-events-none">expand_more</span>
+                 </div>
+               </div>
+
                <div className="flex gap-3 pt-4">
                  <button 
                    type="button"
@@ -511,6 +549,8 @@ const BuyerOrderDetails: React.FC = () => {
              </form>
           </div>
         </div>
+      )}
+      </>
       )}
 
       {/* Cancel Order Modal */}

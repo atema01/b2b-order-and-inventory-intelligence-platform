@@ -42,6 +42,30 @@ export const markAllNotificationsRead = async (req: Request, res: Response) => {
   }
 };
 
+// POST /api/notifications/:id/read
+export const markNotificationRead = async (req: Request, res: Response) => {
+  const { id } = req.params;
+  try {
+    const recipientId = getRecipientId(req);
+    const result = await pool.query(
+      `UPDATE notifications
+       SET is_read = true
+       WHERE id = $1 AND recipient_id = $2
+       RETURNING id, type, title, message, time, is_read AS "isRead", severity, recipient_id AS "recipientId", related_id AS "relatedId"`,
+      [id, recipientId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error('Mark notification read error:', err);
+    res.status(500).json({ error: 'Failed to mark notification read' });
+  }
+};
+
 // DELETE /api/notifications/:id
 export const deleteNotification = async (req: Request, res: Response) => {
   const { id } = req.params;

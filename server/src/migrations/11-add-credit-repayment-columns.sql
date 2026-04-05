@@ -1,0 +1,5 @@
+ALTER TABLE credit_requests
+ADD COLUMN IF NOT EXISTS repaid_amount NUMERIC(12,2) NOT NULL DEFAULT 0;
+
+ALTER TABLE credit_requests
+ADD COLUMN IF NOT EXISTS repaid_at DATE;

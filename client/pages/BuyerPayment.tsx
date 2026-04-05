@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Order } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -9,6 +9,7 @@ import LoadingState from '../components/LoadingState';
 const BuyerPayment: React.FC = () => {
   const { orderId } = useParams<{ orderId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { t } = useLanguage();
   const { user } = useAuth();
@@ -25,6 +26,7 @@ const BuyerPayment: React.FC = () => {
     image: '',
     notes: ''
   });
+  const query = new URLSearchParams(location.search).get('q')?.trim().toLowerCase() || '';
 
   useEffect(() => {
     let isMounted = true;
@@ -136,9 +138,26 @@ const BuyerPayment: React.FC = () => {
   if (!order) return <div className="p-10 text-center font-bold text-gray-400">Order not found...</div>;
 
   const remaining = order.total - (order.amountPaid || 0);
+  const pageMatches = !query || [
+    order.id,
+    order.date,
+    order.paymentStatus,
+    form.method,
+    form.reference,
+    form.notes,
+    String(order.total),
+    String(order.amountPaid || 0),
+    String(remaining)
+  ].join(' ').toLowerCase().includes(query);
 
   return (
     <div className="p-4 lg:p-8 max-w-2xl mx-auto space-y-8 pb-44">
+      {!pageMatches ? (
+        <div className="rounded-[32px] border border-gray-100 bg-white p-12 text-center text-slate-400 shadow-sm">
+          <p className="text-xs font-bold uppercase tracking-widest">No matching content on this page</p>
+        </div>
+      ) : (
+      <>
       {/* Header */}
       <div className="flex items-center gap-4">
         <button 
@@ -277,6 +296,8 @@ const BuyerPayment: React.FC = () => {
            </div>
         </div>
       </form>
+      </>
+      )}
     </div>
   );
 };

@@ -58,7 +58,12 @@ const CreditRequests: React.FC = () => {
     .reduce((acc, r) => acc + r.amount, 0);
 
   const approvedThisMonth = requests
-    .filter(r => r.status === 'Approved' || r.status === 'Partially Approved')
+    .filter(r =>
+      r.status === 'Approved' ||
+      r.status === 'Partially Approved' ||
+      r.status === 'Partially Paid' ||
+      r.status === 'Fully Paid'
+    )
     .reduce((acc, r) => acc + (r.approvedAmount || r.amount), 0);
 
   if (loading) {
@@ -187,6 +192,8 @@ const CreditRequests: React.FC = () => {
                         px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-wider
                         ${req.status === 'Approved' ? 'bg-emerald-100 text-emerald-700' : 
                           req.status === 'Partially Approved' ? 'bg-blue-100 text-blue-700' :
+                          req.status === 'Partially Paid' ? 'bg-amber-100 text-amber-700' :
+                          req.status === 'Fully Paid' ? 'bg-emerald-100 text-emerald-700' :
                           req.status === 'Rejected' ? 'bg-red-100 text-red-700' : 
                           'bg-amber-100 text-amber-700'}
                       `}>

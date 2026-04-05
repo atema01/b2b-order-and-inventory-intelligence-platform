@@ -14,6 +14,7 @@ const BuyerOrders: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [filteredOrders, setFilteredOrders] = useState<Order[]>([]);
   const [activeStatus, setActiveStatus] = useState<string>('All');
+  const [searchQuery, setSearchQuery] = useState('');
   const [buyer, setBuyer] = useState<Buyer | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -98,16 +99,34 @@ const BuyerOrders: React.FC = () => {
   }, [user?.id]);
 
   useEffect(() => {
+    let result = orders;
     if (activeStatus === 'All') {
-      // Show everything EXCEPT Cancelled and Deleted
-      setFilteredOrders(orders.filter(o => 
-        normalizeStatus(o.status) !== OrderStatus.CANCELLED && 
+      result = result.filter(o =>
+        normalizeStatus(o.status) !== OrderStatus.CANCELLED &&
         normalizeStatus(o.status) !== OrderStatus.DELETED
-      ));
+      );
     } else {
-      setFilteredOrders(orders.filter(o => normalizeStatus(o.status) === activeStatus));
+      result = result.filter(o => normalizeStatus(o.status) === activeStatus);
     }
-  }, [activeStatus, orders]);
+
+    if (searchQuery.trim()) {
+      const query = searchQuery.trim().toLowerCase();
+      result = result.filter((order) => {
+        const haystack = [
+          order.id,
+          order.date,
+          order.paymentStatus,
+          order.paymentTerms || '',
+          normalizeStatus(order.status),
+          String(order.total),
+          String(order.amountPaid || 0)
+        ].join(' ').toLowerCase();
+        return haystack.includes(query);
+      });
+    }
+
+    setFilteredOrders(result);
+  }, [activeStatus, orders, searchQuery]);
 
   const normalizeStatus = (status: OrderStatus | string) => {
     const value = status?.toString().trim().toUpperCase() || '';
@@ -181,6 +200,17 @@ const BuyerOrders: React.FC = () => {
     <div className="p-4 lg:p-8 max-w-5xl mx-auto space-y-6 pb-32">
       <div className="flex flex-col gap-4">
         <h1 className="text-2xl lg:text-3xl font-black text-slate-900 tracking-tight">{t('nav.history')}</h1>
+
+        <div className="relative">
+          <span className="absolute left-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-gray-400">search</span>
+          <input
+            type="text"
+            placeholder="Search orders, status, or payment info"
+            className="w-full pl-12 pr-4 py-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-medium shadow-sm focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
         
         {/* Status Filters */}
         <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
