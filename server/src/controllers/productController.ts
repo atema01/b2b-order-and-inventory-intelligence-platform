@@ -2,6 +2,8 @@
 import { Request, Response } from 'express';
 import pool from '../config/db';
 import { logActivity } from '../utils/activityLog';
+import { createNotificationRecord } from '../services/notificationService';
+import { emitInventoryChanged } from '../services/realtime';
 
 const getParam = (value: string | string[] | undefined): string => {
   if (Array.isArray(value)) return value[0] ?? '';
@@ -35,21 +37,183 @@ const mapProductRow = (row: any) => ({
   }
 });
 
+type ProductRecord = ReturnType<typeof mapProductRow>;
+
+type RecommendationContext = {
+  buyerProductUnits: Map<string, number>;
+  buyerProductLastOrdered: Map<string, string>;
+  buyerCategoryUnits: Map<string, number>;
+  buyerCategoryLastOrdered: Map<string, string>;
+  globalProductUnits: Map<string, number>;
+};
+
+const ACTIVE_RECOMMENDATION_ORDER_STATUSES = ['Pending', 'Processing', 'Shipped', 'Delivered'];
+
+const getDaysSince = (value?: string | null) => {
+  if (!value) return Number.POSITIVE_INFINITY;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return Number.POSITIVE_INFINITY;
+  const diffMs = Date.now() - parsed.getTime();
+  return diffMs / (1000 * 60 * 60 * 24);
+};
+
+const getBuyerRecommendationContext = async (buyerId: string): Promise<RecommendationContext> => {
+  const buyerProductUnits = new Map<string, number>();
+  const buyerProductLastOrdered = new Map<string, string>();
+  const buyerCategoryUnits = new Map<string, number>();
+  const buyerCategoryLastOrdered = new Map<string, string>();
+  const globalProductUnits = new Map<string, number>();
+
+  const [buyerHistoryResult, globalPopularityResult] = await Promise.all([
+    pool.query(
+      `
+      SELECT
+        oi.product_id,
+        p.category,
+        SUM(oi.quantity)::int AS units,
+        MAX(o.date)::text AS last_ordered
+      FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id
+      JOIN products p ON p.id = oi.product_id
+      WHERE o.buyer_id = $1
+        AND o.status = ANY($2::varchar[])
+      GROUP BY oi.product_id, p.category
+      `,
+      [buyerId, ACTIVE_RECOMMENDATION_ORDER_STATUSES]
+    ),
+    pool.query(
+      `
+      SELECT
+        oi.product_id,
+        SUM(oi.quantity)::int AS units
+      FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id
+      WHERE o.status = ANY($1::varchar[])
+      GROUP BY oi.product_id
+      `,
+      [ACTIVE_RECOMMENDATION_ORDER_STATUSES]
+    )
+  ]);
+
+  buyerHistoryResult.rows.forEach((row: any) => {
+    const productId = String(row.product_id);
+    const category = String(row.category || '');
+    const units = Number(row.units || 0);
+    const lastOrdered = String(row.last_ordered || '');
+
+    buyerProductUnits.set(productId, units);
+    if (lastOrdered) {
+      buyerProductLastOrdered.set(productId, lastOrdered);
+    }
+
+    buyerCategoryUnits.set(category, (buyerCategoryUnits.get(category) || 0) + units);
+    const previousCategoryDate = buyerCategoryLastOrdered.get(category);
+    if (!previousCategoryDate || new Date(lastOrdered) > new Date(previousCategoryDate)) {
+      buyerCategoryLastOrdered.set(category, lastOrdered);
+    }
+  });
+
+  globalPopularityResult.rows.forEach((row: any) => {
+    globalProductUnits.set(String(row.product_id), Number(row.units || 0));
+  });
+
+  return {
+    buyerProductUnits,
+    buyerProductLastOrdered,
+    buyerCategoryUnits,
+    buyerCategoryLastOrdered,
+    globalProductUnits
+  };
+};
+
+const rankProductsForBuyer = (products: ProductRecord[], context: RecommendationContext) => {
+  const scored = products.map((product) => {
+    const totalStock = product.stock.mainWarehouse + product.stock.backRoom + product.stock.showRoom;
+    const priorUnits = context.buyerProductUnits.get(product.id) || 0;
+    const categoryUnits = context.buyerCategoryUnits.get(product.category) || 0;
+    const globalUnits = context.globalProductUnits.get(product.id) || 0;
+    const priorDays = getDaysSince(context.buyerProductLastOrdered.get(product.id));
+    const categoryDays = getDaysSince(context.buyerCategoryLastOrdered.get(product.category));
+
+    let score = 0;
+    const reasons: string[] = [];
+
+    if (priorUnits > 0) {
+      score += 70 + Math.min(priorUnits * 4, 40);
+      reasons.push('Previously ordered by this buyer');
+      if (priorDays <= 45) {
+        score += 25;
+        reasons.push('Recently reordered');
+      } else if (priorDays <= 120) {
+        score += 12;
+      }
+    }
+
+    if (categoryUnits > 0) {
+      score += 30 + Math.min(categoryUnits * 2, 24);
+      reasons.push('Matches a category this buyer purchases often');
+      if (categoryDays <= 60) {
+        score += 10;
+      }
+    }
+
+    if (globalUnits > 0) {
+      score += Math.min(globalUnits, 20);
+      reasons.push('Popular with buyers overall');
+    }
+
+    if (product.status === 'In Stock') {
+      score += 15;
+    } else if (product.status === 'Low') {
+      score += 6;
+    } else if (product.status === 'Empty') {
+      score -= 60;
+    } else if (product.status === 'Discontinued') {
+      score -= 100;
+    }
+
+    if (totalStock <= 0) {
+      score -= 40;
+    }
+
+    return {
+      ...product,
+      recommendationScore: score,
+      recommendationReasons: Array.from(new Set(reasons)).slice(0, 3)
+    };
+  });
+
+  const sorted = scored.sort((a, b) => {
+    if ((b.recommendationScore || 0) !== (a.recommendationScore || 0)) {
+      return (b.recommendationScore || 0) - (a.recommendationScore || 0);
+    }
+    return a.name.localeCompare(b.name);
+  });
+
+  const recommendedIds = new Set(
+    sorted
+      .filter((product) => (product.recommendationScore || 0) > 0)
+      .slice(0, 3)
+      .map((product) => product.id)
+  );
+
+  return sorted.map((product) => ({
+    ...product,
+    recommended: recommendedIds.has(product.id)
+  }));
+};
+
 // System logs disabled; user-initiated logs use logActivity
 
-const createNotification = async (
-  type: string,
-  title: string,
-  message: string,
-  severity: string,
-  recipientId: string,
-  relatedId?: string
-) => {
-  await pool.query(
-    `INSERT INTO notifications (type, title, message, time, is_read, severity, recipient_id, related_id)
-     VALUES ($1, $2, $3, $4, false, $5, $6, $7)`,
-    [type, title, message, new Date().toISOString(), severity, recipientId, relatedId || null]
-  );
+const emitProductInventory = (product: ReturnType<typeof mapProductRow>) => {
+  emitInventoryChanged({
+    productId: product.id,
+    status: product.status,
+    stock: {
+      ...product.stock,
+      total: product.stock.mainWarehouse + product.stock.backRoom + product.stock.showRoom
+    }
+  });
 };
 
 // server/src/controllers/productController.ts
@@ -130,7 +294,9 @@ export const createProduct = async (req: Request, res: Response) => {
       ]
     );
 
-    res.status(201).json(mapProductRow(result.rows[0]));
+    const product = mapProductRow(result.rows[0]);
+    emitProductInventory(product);
+    res.status(201).json(product);
     await logActivity(
       req,
       'Create Product',
@@ -145,10 +311,13 @@ export const createProduct = async (req: Request, res: Response) => {
 // Add this function to productController.ts
 export const getAllProducts = async (req: Request, res: Response) => {
   try {
+    const currentUser = (req as any).user;
     const pageParam = parseInt(String(req.query.page || ''), 10);
     const limitParam = parseInt(String(req.query.limit || ''), 10);
     const usePagination = Number.isFinite(pageParam) && Number.isFinite(limitParam) && pageParam > 0 && limitParam > 0;
     const offset = usePagination ? (pageParam - 1) * limitParam : 0;
+    const shouldRankForBuyer = currentUser?.role === 'R-BUYER' && currentUser?.userId;
+    const shouldPaginateInMemory = shouldRankForBuyer && usePagination;
 
     const result = await pool.query(
       `
@@ -163,9 +332,9 @@ export const getAllProducts = async (req: Request, res: Response) => {
         stock_show_room AS "stock.showRoom"
       FROM products
       ORDER BY name
-      ${usePagination ? 'LIMIT $1 OFFSET $2' : ''}
+      ${usePagination && !shouldPaginateInMemory ? 'LIMIT $1 OFFSET $2' : ''}
       `,
-      usePagination ? [limitParam, offset] : []
+      usePagination && !shouldPaginateInMemory ? [limitParam, offset] : []
     );
 
     const products = result.rows.map(row => ({
@@ -189,12 +358,20 @@ export const getAllProducts = async (req: Request, res: Response) => {
       }
     }));
 
+    const rankedProducts =
+      shouldRankForBuyer
+        ? rankProductsForBuyer(products, await getBuyerRecommendationContext(String(currentUser.userId)))
+        : products;
+
     if (usePagination) {
       const countResult = await pool.query('SELECT COUNT(*)::int AS count FROM products');
       const total = countResult.rows[0]?.count || 0;
-      res.json({ data: products, page: pageParam, limit: limitParam, total });
+      const paginatedProducts = shouldPaginateInMemory
+        ? rankedProducts.slice(offset, offset + limitParam)
+        : rankedProducts;
+      res.json({ data: paginatedProducts, page: pageParam, limit: limitParam, total });
     } else {
-      res.json(products);
+      res.json(rankedProducts);
     }
   } catch (err) {
     console.error('Get products error:', err);
@@ -234,7 +411,9 @@ export const updateProduct = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Product not found' });
     }
 
-    res.json(mapProductRow(result.rows[0]));
+    const product = mapProductRow(result.rows[0]);
+    emitProductInventory(product);
+    res.json(product);
     await logActivity(
       req,
       'Update Product',
@@ -327,7 +506,7 @@ export const adjustProductStock = async (req: Request, res: Response) => {
     );
 
     if (newStatus !== oldStatus && (newStatus === 'Low' || newStatus === 'Empty')) {
-      await createNotification(
+      await createNotificationRecord(
         'Stock',
         'Inventory Alert',
         `${newStatus} stock warning for product ${id}.`,
@@ -340,7 +519,9 @@ export const adjustProductStock = async (req: Request, res: Response) => {
       // System logs disabled; only user-initiated logs are recorded
     }
 
-    res.json(mapProductRow(updateResult.rows[0]));
+    const product = mapProductRow(updateResult.rows[0]);
+    emitProductInventory(product);
+    res.json(product);
     await logActivity(
       req,
       'Adjust Stock',

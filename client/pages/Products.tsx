@@ -1,83 +1,142 @@
-
 import React, { useState, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Product, Category, StorageLocationId } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { DEFAULT_STORAGE_LOCATIONS, fetchStorageLocations } from '../utils/storageLocations';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
+import RefreshIndicator from '../components/RefreshIndicator';
+
+type ProductListQueryData = {
+  products: Product[];
+  categories: Category[];
+  total: number;
+};
+
+type InventoryRealtimeDetail = {
+  productId?: string;
+  status?: Product['status'];
+  stock?: {
+    mainWarehouse: number;
+    backRoom: number;
+    showRoom: number;
+    total: number;
+  };
+};
 
 const Products: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [products, setProducts] = useState<Product[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
   const [filter, setFilter] = useState('All');
   const [locationFilter, setLocationFilter] = useState(searchParams.get('location') || 'All');
   const [search, setSearch] = useState('');
   const [isFabOpen, setIsFabOpen] = useState(false);
-  const [storageLocations, setStorageLocations] = useState(DEFAULT_STORAGE_LOCATIONS);
   const { t } = useLanguage();
-const [loading, setLoading] = useState(true);
-const [page, setPage] = useState(1);
-const [limit] = useState(16);
-const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [limit] = useState(16);
+  const queryClient = useQueryClient();
 
-
-
-// With this:
-useEffect(() => {
-  const fetchData = async () => {
-    setLoading(true); // start loading
-    try {
-
+  const {
+    data: productsData = { products: [], categories: [], total: 0 },
+    isLoading,
+    isFetching,
+    error
+  } = useQuery({
+    queryKey: ['products', page, limit],
+    queryFn: async (): Promise<ProductListQueryData> => {
       const [productsRes, categoriesRes] = await Promise.all([
         fetch(`/api/products?page=${page}&limit=${limit}`, { credentials: 'include' }),
         fetch('/api/categories', { credentials: 'include' })
       ]);
 
-      if (productsRes.ok && categoriesRes.ok) {
-        const [productsData, categoriesData] = await Promise.all([
-          productsRes.json(),
-          categoriesRes.json()
-        ]);
-        if (productsData?.data) {
-          setProducts(productsData.data);
-          setTotal(productsData.total || 0);
-        } else {
-          setProducts(productsData);
-          setTotal(productsData?.length || 0);
-        }
-        setCategories(categoriesData);
+      if (!productsRes.ok || !categoriesRes.ok) {
+        throw new Error('Failed to fetch products');
       }
-    } catch (err) {
-      console.error('Failed to fetch products/categories:', err);
-    }
-    finally {
-      setLoading(false); // end loading
-    }
-  };
 
-  fetchData();
-}, [searchParams, page, limit]);
+      const [fetchedProducts, fetchedCategories] = await Promise.all([
+        productsRes.json(),
+        categoriesRes.json()
+      ]);
 
-useEffect(() => {
-  let active = true;
-  fetchStorageLocations()
-    .then((locations) => {
-      if (active) setStorageLocations(locations);
-    })
-    .catch(() => {});
-  return () => { active = false; };
-}, []);
-if (loading) {
-  return (
-    <div className="p-4 lg:p-8 flex items-center justify-center min-h-screen">
-      <div className="text-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mx-auto mb-4"></div>
-        <p className="text-slate-600">Loading products...</p>
+      return {
+        products: fetchedProducts?.data ? fetchedProducts.data : fetchedProducts,
+        categories: Array.isArray(fetchedCategories) ? fetchedCategories : [],
+        total: fetchedProducts?.data ? fetchedProducts.total || 0 : fetchedProducts?.length || 0
+      };
+    },
+    placeholderData: (previousData) => previousData
+  });
+
+  const { data: storageLocations = DEFAULT_STORAGE_LOCATIONS } = useQuery({
+    queryKey: ['storage-locations'],
+    queryFn: fetchStorageLocations,
+    initialData: DEFAULT_STORAGE_LOCATIONS
+  });
+
+  useRealtimeEvent<InventoryRealtimeDetail>('realtime:inventory', (detail) => {
+    if (!detail?.productId) {
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      return;
+    }
+
+    queryClient.setQueriesData<ProductListQueryData>(
+      { queryKey: ['products'] },
+      (current) => {
+        if (!current) return current;
+
+        let didChange = false;
+        const nextProducts = current.products.map((product) => {
+          if (product.id !== detail.productId) {
+            return product;
+          }
+
+          didChange = true;
+          return {
+            ...product,
+            status: detail.status ?? product.status,
+            stock: detail.stock
+              ? {
+                  mainWarehouse: detail.stock.mainWarehouse,
+                  backRoom: detail.stock.backRoom,
+                  showRoom: detail.stock.showRoom
+                }
+              : product.stock
+          };
+        });
+
+        if (!didChange) return current;
+
+        return {
+          ...current,
+          products: nextProducts
+        };
+      }
+    );
+
+    void queryClient.invalidateQueries({
+      queryKey: ['products'],
+      refetchType: 'active'
+    });
+  });
+
+  useEffect(() => {
+    setLocationFilter(searchParams.get('location') || 'All');
+  }, [searchParams]);
+
+  if (isLoading) {
+    return (
+      <div className="p-4 lg:p-8 flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-slate-600">Loading products...</p>
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
+
+  const products = productsData.products;
+  const categories = productsData.categories;
+  const total = productsData.total;
 
   const filteredProducts = products.filter(p => {
     const matchesCat = filter === 'All' || p.category === filter;
@@ -101,7 +160,7 @@ if (loading) {
     }
     setSearchParams(searchParams);
   };
-
+  
   return (
     <div className="min-h-full bg-gray-50 pb-24">
       {/* Click-away overlay for FAB */}
@@ -115,7 +174,10 @@ if (loading) {
       {/* Sticky Header */}
       <div className="sticky top-16 z-30 bg-white border-b border-gray-100">
         <div className="max-w-7xl mx-auto px-4 pb-4">
-          <div className="flex flex-col lg:flex-row gap-3 items-stretch pt-4">
+          <div className="flex items-center justify-end pt-4">
+            <RefreshIndicator visible={isFetching && !isLoading} />
+          </div>
+          <div className="flex flex-col lg:flex-row gap-3 items-stretch pt-3">
             <div className="flex-1 relative group">
               <span className="absolute left-3.5 top-1/2 -translate-y-1/2 material-symbols-outlined text-gray-400 text-xl group-focus-within:text-primary transition-colors">search</span>
               <input 
@@ -189,6 +251,19 @@ if (loading) {
 
       {/* Product List/Grid */}
       <div className="max-w-7xl mx-auto px-4 pt-10 lg:pt-12 lg:px-8">
+        {error && (
+          <div className="mb-6 rounded-3xl border border-red-100 bg-red-50 px-5 py-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm font-bold text-red-700">Failed to refresh products. Showing the latest available data.</p>
+              <button
+                onClick={() => queryClient.invalidateQueries({ queryKey: ['products'] })}
+                className="rounded-2xl bg-red-600 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white transition-all hover:bg-red-700"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        )}
         <div className="flex flex-col sm:grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 lg:gap-6">
           {filteredProducts.map((p) => {
             const totalStock = storageLocations.reduce((acc, loc) => acc + (p.stock[loc.id as StorageLocationId] || 0), 0);
@@ -254,7 +329,7 @@ if (loading) {
       </div>
 
       {/* Pagination */}
-      {!loading && total > limit && (
+      {!isLoading && total > limit && (
         <div className="max-w-7xl mx-auto px-4 pb-10">
           <div className="flex items-center justify-center gap-4 pt-8">
             <button

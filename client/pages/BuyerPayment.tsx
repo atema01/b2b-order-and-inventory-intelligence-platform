@@ -1,25 +1,28 @@
 
-import React, { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import React, { useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useParams, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { Order } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingState from '../components/LoadingState';
+import RefreshIndicator from '../components/RefreshIndicator';
+import { buyerQueryKeys, loadBuyerPaymentOrder } from '../services/buyerQueries';
 
 const BuyerPayment: React.FC = () => {
   const { orderId } = useParams<{ orderId: string }>();
+  const [searchParams] = useSearchParams();
+  const draftId = searchParams.get('draftId');
+  const isDraftCheckout = !orderId;
   const navigate = useNavigate();
   const location = useLocation();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { t } = useLanguage();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
   
-  const [order, setOrder] = useState<Order | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [payAmount, setPayAmount] = useState<number>(0);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
-  
   const [form, setForm] = useState({
     method: 'Bank Transfer',
     reference: '',
@@ -27,47 +30,20 @@ const BuyerPayment: React.FC = () => {
     notes: ''
   });
   const query = new URLSearchParams(location.search).get('q')?.trim().toLowerCase() || '';
+  const {
+    data: order,
+    isLoading,
+    isFetching,
+    error
+  } = useQuery({
+    queryKey: buyerQueryKeys.paymentOrder(orderId, user?.id, draftId),
+    queryFn: () => loadBuyerPaymentOrder(orderId, user?.id, draftId)
+  });
 
   useEffect(() => {
-    let isMounted = true;
-
-    const loadOrder = async () => {
-      if (!orderId || !user?.id) {
-        setIsLoading(false);
-        return;
-      }
-
-      setIsLoading(true);
-      setError('');
-
-      try {
-        const response = await fetch(`/api/orders/${orderId}`, { credentials: 'include' });
-        if (!response.ok) {
-          throw new Error('Order not found');
-        }
-        const data = await response.json();
-        if (data?.buyerId !== user.id) {
-          throw new Error('Order not found');
-        }
-
-        if (!isMounted) return;
-
-        setOrder(data);
-        setPayAmount(data.total - (data.amountPaid || 0));
-      } catch (err) {
-        console.error('Load order error:', err);
-        if (isMounted) setError('Order not found.');
-      } finally {
-        if (isMounted) setIsLoading(false);
-      }
-    };
-
-    loadOrder();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [orderId, user?.id]);
+    if (!order) return;
+    setPayAmount(isDraftCheckout ? order.total : order.total - (order.amountPaid || 0));
+  }, [order, isDraftCheckout]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -90,12 +66,12 @@ const BuyerPayment: React.FC = () => {
 
     if (!order) return;
     
-    if (payAmount <= 0) {
+    if (!Number.isFinite(payAmount) || payAmount <= 0) {
       alert("Payment amount must be greater than zero.");
       return;
     }
 
-    const remaining = order.total - (order.amountPaid || 0);
+    const remaining = isDraftCheckout ? order.total : order.total - (order.amountPaid || 0);
     if (payAmount > remaining) {
       alert(`Payment cannot exceed remaining balance of ETB ${remaining.toLocaleString()}`);
       return;
@@ -104,40 +80,92 @@ const BuyerPayment: React.FC = () => {
     setIsSubmitting(true);
 
     try {
-      const response = await fetch('/api/payments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          orderId: order.id,
-          amount: payAmount,
-          method: form.method,
-          referenceId: form.reference || null,
-          proofImage: form.image || null,
-          notes: form.notes || null
-        })
-      });
+      const response = isDraftCheckout
+        ? await fetch('/api/orders/checkout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              draftId: order.id,
+              payment: {
+                amount: payAmount,
+                method: form.method,
+                referenceId: form.reference || null,
+                proofImage: form.image || null,
+                notes: form.notes || null
+              }
+            })
+          })
+        : await fetch('/api/payments', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              orderId: order.id,
+              amount: payAmount,
+              method: form.method,
+              referenceId: form.reference || null,
+              proofImage: form.image || null,
+              notes: form.notes || null
+            })
+          });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to submit payment');
+        const errorData = await response.json().catch(() => ({}));
+        const errorMessage = String(errorData?.error || '');
+        const requestedPath = String(errorData?.requested || '');
+        if (response.status === 404 && errorMessage.toLowerCase().includes('route not found')) {
+          throw new Error(
+            `Backend route is missing for ${requestedPath || (isDraftCheckout ? '/api/orders/checkout' : '/api/payments')}. ` +
+            'Please restart the backend server so the latest routes are loaded.'
+          );
+        }
+        throw new Error(errorMessage || 'Failed to submit payment');
       }
 
-      alert("Payment submitted successfully! Waiting for approval.");
-      navigate(`/orders/${orderId}`);
+      const responseData = await response.json().catch(() => null);
+
+      await queryClient.invalidateQueries({ queryKey: ['buyer-payment-order'] });
+      await queryClient.invalidateQueries({ queryKey: ['buyer-order-details'] });
+      await queryClient.invalidateQueries({ queryKey: ['buyer-orders'] });
+      await queryClient.invalidateQueries({ queryKey: ['buyer-payments'] });
+      await queryClient.invalidateQueries({ queryKey: ['buyer-dashboard'] });
+      await queryClient.invalidateQueries({ queryKey: ['buyer-credit-list'] });
+
+      alert(
+        isDraftCheckout
+          ? 'Payment submitted. Your order is now awaiting seller verification.'
+          : 'Payment submitted successfully! Waiting for approval.'
+      );
+
+      const targetOrderId = isDraftCheckout ? responseData?.orderId : orderId;
+      navigate(targetOrderId ? `/orders/${targetOrderId}` : '/orders');
     } catch (err) {
       console.error('Payment submission error:', err);
-      alert('Failed to submit payment. Please try again.');
+      alert(err instanceof Error ? err.message : 'Failed to submit payment. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
   if (isLoading) return <LoadingState message="Loading order..." />;
-  if (error) return <div className="p-10 text-center font-bold text-gray-400">{error}</div>;
+  if (error) {
+    return (
+      <div className="p-10 text-center">
+        <p className="font-bold text-red-600">Order not found.</p>
+        <p className="mt-2 text-sm text-red-500">{error instanceof Error ? error.message : 'An unexpected error occurred.'}</p>
+        <button
+          onClick={() => queryClient.invalidateQueries({ queryKey: buyerQueryKeys.paymentOrder(orderId, user?.id) })}
+          className="mt-4 rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-red-700"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
   if (!order) return <div className="p-10 text-center font-bold text-gray-400">Order not found...</div>;
 
-  const remaining = order.total - (order.amountPaid || 0);
+  const remaining = isDraftCheckout ? order.total : order.total - (order.amountPaid || 0);
   const pageMatches = !query || [
     order.id,
     order.date,
@@ -170,17 +198,22 @@ const BuyerPayment: React.FC = () => {
           <h1 className="text-2xl font-black text-slate-900">{t('buyer.makePayment')}</h1>
           <p className="text-sm font-medium text-gray-500">Securely settle your order balance.</p>
         </div>
+        <RefreshIndicator visible={isFetching && !isLoading} />
       </div>
 
       {/* Order Summary Card */}
       <div className="bg-[#E0F7FA]/30 rounded-[32px] p-6 border border-[#E0F7FA] shadow-sm flex flex-col md:flex-row justify-between items-center gap-4">
         <div>
-          <p className="text-xs font-black text-[#00A3C4] uppercase tracking-widest mb-1">Paying for</p>
+          <p className="text-xs font-black text-[#00A3C4] uppercase tracking-widest mb-1">
+            {isDraftCheckout ? 'Checking out' : 'Paying for'}
+          </p>
           <p className="text-lg font-black text-slate-900">Order #{order.id.split('-').pop()}</p>
           <p className="text-xs font-bold text-gray-400 mt-0.5">{order.date}</p>
         </div>
         <div className="text-right">
-          <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">Remaining Balance</p>
+          <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">
+            {isDraftCheckout ? 'Order Total' : 'Remaining Balance'}
+          </p>
           <p className="text-2xl font-black text-slate-900">ETB {remaining.toLocaleString()}</p>
           {order.amountPaid > 0 && <p className="text-[10px] font-bold text-emerald-600">Already Paid: ETB {order.amountPaid.toLocaleString()}</p>}
         </div>

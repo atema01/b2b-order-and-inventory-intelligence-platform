@@ -1,93 +1,78 @@
 
-import React, { useState, useEffect } from 'react';
+import React from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Order, Product, Buyer, OrderStatus } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../contexts/LanguageContext';
 import LoadingState from '../components/LoadingState';
 import { useAuth } from '../contexts/AuthContext';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
+import RefreshIndicator from '../components/RefreshIndicator';
+import { buyerQueryKeys, loadBuyerDashboardData } from '../services/buyerQueries';
 
 const BuyerDashboard: React.FC = () => {
   const navigate = useNavigate();
   const { t } = useLanguage();
   const { user } = useAuth();
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [buyer, setBuyer] = useState<Buyer | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
+  const queryClient = useQueryClient();
+  const {
+    data,
+    isLoading,
+    isFetching,
+    error
+  } = useQuery({
+    queryKey: buyerQueryKeys.dashboard(user?.id),
+    queryFn: () => loadBuyerDashboardData(user?.id)
+  });
 
-  useEffect(() => {
-    let isMounted = true;
+  const orders = data?.orders ?? [];
+  const products = data?.products ?? [];
+  const buyer = data?.buyer ?? null;
 
-    const toBuyerProfile = (me: any): Buyer => ({
-      id: me?.id || user?.id || '',
-      companyName: me?.companyName || 'Buyer Account',
-      contactPerson: me?.name || 'Buyer',
-      email: me?.email || '',
-      phone: me?.phone || '',
-      address: '',
-      creditLimit: 0,
-      availableCredit: 0,
-      outstandingBalance: 0,
-      paymentTerms: '',
-      totalSpend: 0,
-      totalOrders: 0,
-      status: 'Active',
-      tier: me?.tier || 'Bronze',
-      discountRate: 0,
-      joinDate: ''
-    });
+  useRealtimeEvent('realtime:inventory', () => {
+    queryClient.invalidateQueries({ queryKey: ['buyer-dashboard'] });
+  });
 
-    const loadBuyerDashboard = async () => {
-      if (!user?.id) {
-        setIsLoading(false);
-        return;
-      }
+  useRealtimeEvent('realtime:orders', (detail?: { buyerId?: string }) => {
+    if (!user?.id || (detail?.buyerId && detail.buyerId !== user.id)) return;
+    queryClient.invalidateQueries({ queryKey: ['buyer-dashboard'] });
+  });
 
-      setIsLoading(true);
-      setError('');
+  useRealtimeEvent('realtime:payments', (detail?: { buyerId?: string }) => {
+    if (!user?.id || (detail?.buyerId && detail.buyerId !== user.id)) return;
+    queryClient.invalidateQueries({ queryKey: ['buyer-dashboard'] });
+  });
 
-      try {
-        const [meRes, ordersRes, productsRes] = await Promise.all([
-          fetch('/api/auth/me', { credentials: 'include' }),
-          fetch('/api/orders', { credentials: 'include' }),
-          fetch('/api/products', { credentials: 'include' })
-        ]);
-
-        if (!meRes.ok) {
-          throw new Error('Failed to load buyer profile');
-        }
-
-        const meData = await meRes.json();
-        const ordersData = ordersRes.ok ? await ordersRes.json() : [];
-        const productsData = productsRes.ok ? await productsRes.json() : [];
-
-        const ordersArray = Array.isArray(ordersData) ? ordersData : (ordersData?.data || []);
-        const productsArray = Array.isArray(productsData) ? productsData : (productsData?.data || []);
-
-        if (!isMounted) return;
-
-        setBuyer(toBuyerProfile(meData));
-        setOrders(ordersArray.filter((o: Order) => o.buyerId === user.id));
-        setProducts(productsArray);
-      } catch (err) {
-        console.error('Failed to load buyer dashboard:', err);
-        if (isMounted) {
-          setError('Failed to load buyer dashboard data.');
-        }
-      } finally {
-        if (isMounted) setIsLoading(false);
-      }
-    };
-
-    loadBuyerDashboard();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [user?.id]);
+  useRealtimeEvent('realtime:credits', (detail?: { buyerId?: string }) => {
+    if (!user?.id || (detail?.buyerId && detail.buyerId !== user.id)) return;
+    queryClient.invalidateQueries({ queryKey: ['buyer-dashboard'] });
+  });
 
   const normalizeStatus = (status: string) => status?.toString().trim().toUpperCase() || '';
+  const now = new Date();
+  const startOfCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+  const isBetween = (value: string, start: Date, end: Date) => {
+    const date = new Date(value);
+    return !Number.isNaN(date.getTime()) && date >= start && date < end;
+  };
+
+  const formatTrend = (current: number, previous: number) => {
+    if (previous === 0) {
+      if (current === 0) return { text: '0.0%', up: true };
+      return { text: '+100.0%', up: true };
+    }
+    const change = ((current - previous) / previous) * 100;
+    const sign = change > 0 ? '+' : '';
+    return { text: `${sign}${change.toFixed(1)}%`, up: change >= 0 };
+  };
+
+  const formatCompactCurrency = (value: number) => {
+    if (value >= 1000000) return `ETB ${(value / 1000000).toFixed(1)}M`;
+    if (value >= 1000) return `ETB ${(value / 1000).toFixed(1)}K`;
+    return `ETB ${value.toLocaleString()}`;
+  };
 
   const getStatusBadge = (status: OrderStatus) => {
     const normalized = normalizeStatus(status);
@@ -103,8 +88,63 @@ const BuyerDashboard: React.FC = () => {
     navigate('/catalog');
   };
 
+  const activeOrdersCount = orders.filter((order) => {
+    const status = normalizeStatus(order.status);
+    return status !== OrderStatus.DELIVERED &&
+      status !== OrderStatus.CANCELLED &&
+      status !== OrderStatus.DELETED;
+  }).length;
+
+  const previousMonthOrders = orders.filter((order) =>
+    isBetween(order.date, startOfLastMonth, startOfCurrentMonth)
+  );
+  const previousActiveOrdersCount = previousMonthOrders.filter((order) => {
+    const status = normalizeStatus(order.status);
+    return status !== OrderStatus.DELIVERED &&
+      status !== OrderStatus.CANCELLED &&
+      status !== OrderStatus.DELETED;
+  }).length;
+  const currentMonthOrdersCount = orders.filter((order) =>
+    isBetween(order.date, startOfCurrentMonth, now)
+  ).length;
+  const previousMonthOrdersCount = previousMonthOrders.length;
+  const currentMonthSpend = orders
+    .filter((order) => isBetween(order.date, startOfCurrentMonth, now))
+    .reduce((sum, order) => sum + (order.amountPaid || 0), 0);
+  const previousMonthSpend = previousMonthOrders
+    .reduce((sum, order) => sum + (order.amountPaid || 0), 0);
+  const totalSpend = orders.reduce((sum, order) => sum + (order.amountPaid || 0), 0);
+  const totalSpendBeforeThisMonth = totalSpend - currentMonthSpend;
+
+  const activeOrdersTrend = formatTrend(activeOrdersCount, previousActiveOrdersCount);
+  const monthlyOrdersTrend = formatTrend(currentMonthOrdersCount, previousMonthOrdersCount);
+  const monthlySpendTrend = formatTrend(currentMonthSpend, previousMonthSpend);
+  const totalSpendTrend = formatTrend(totalSpend, totalSpendBeforeThisMonth);
+
+  const summaryCards = [
+    { label: t('buyer.activeOrders'), value: activeOrdersCount.toLocaleString(), trend: activeOrdersTrend.text, up: activeOrdersTrend.up },
+    { label: t('buyer.monthlyOrders'), value: currentMonthOrdersCount.toLocaleString(), trend: monthlyOrdersTrend.text, up: monthlyOrdersTrend.up },
+    { label: t('buyer.monthlySpend'), value: formatCompactCurrency(currentMonthSpend), trend: monthlySpendTrend.text, up: monthlySpendTrend.up },
+    { label: t('buyer.totalSpend'), value: formatCompactCurrency(totalSpend), trend: totalSpendTrend.text, up: totalSpendTrend.up }
+  ];
+
   if (isLoading) return <LoadingState message="Loading dashboard..." />;
-  if (error) return <div className="p-8 text-red-600 font-semibold">{error}</div>;
+  if (error) {
+    return (
+      <div className="p-8">
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-center">
+          <p className="mb-2 font-semibold text-red-700">Failed to load buyer dashboard data.</p>
+          <p className="mb-4 text-sm text-red-600">{error instanceof Error ? error.message : 'An unexpected error occurred.'}</p>
+          <button
+            onClick={() => queryClient.invalidateQueries({ queryKey: buyerQueryKeys.dashboard(user?.id) })}
+            className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-red-700"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (!buyer) return <div className="p-8">No buyer profile found.</div>;
 
   return (
@@ -112,49 +152,25 @@ const BuyerDashboard: React.FC = () => {
       {/* Welcome */}
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div className="space-y-1">
-          <h2 className="text-2xl lg:text-3xl font-black text-slate-900 tracking-tight">{t('buyer.welcome')}, {buyer.contactPerson.split(' ')[0]}</h2>
-          <p className="text-slate-500 text-sm lg:text-base font-medium">{t('buyer.overview')} <span className="font-bold text-slate-700">{buyer.companyName}</span></p>
-        </div>
+          <h2 className="text-2xl lg:text-3xl font-black text-slate-900 tracking-tight">{t('dash.hello')}, {buyer.contactPerson.split(' ')[0]}</h2>
+ <p className="text-slate-500 text-sm font-medium">
+            {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+          </p>        </div>
+        <RefreshIndicator visible={isFetching && !isLoading} />
       </div>
 
       {/* Business Health Section - Full Width Stats */}
       <section className="space-y-4">
-        <h3 className="text-lg font-bold text-slate-900 px-1">{t('buyer.overview')}</h3>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 lg:gap-6">
-          <div className="bg-white p-6 rounded-[28px] border border-gray-100 shadow-sm flex items-center gap-5 hover:border-[#1E40AF]/20 hover:shadow-md transition-all group">
-            <div className="size-16 rounded-2xl bg-[#DBEAFE] text-[#1E40AF] flex items-center justify-center group-hover:scale-110 transition-transform">
-              <span className="material-symbols-outlined text-3xl">local_shipping</span>
-            </div>
-            <div>
-              <p className="text-xs text-gray-400 font-black uppercase tracking-wide mb-1">{t('buyer.activeOrders')}</p>
-              <p className="text-3xl font-black text-slate-800">
-                {orders.filter(o => {
-                  const status = normalizeStatus(o.status);
-                  return status !== OrderStatus.DELIVERED && status !== OrderStatus.CANCELLED;
-                }).length}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
+          {summaryCards.map((card) => (
+            <div key={card.label} className="bg-white p-4 lg:p-6 rounded-2xl lg:rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-all">
+              <p className="text-[10px] lg:text-sm font-semibold text-gray-500 mb-1 lg:mb-2 uppercase tracking-wider">{card.label}</p>
+              <p className="text-lg lg:text-3xl font-black text-slate-800">{card.value}</p>
+              <p className={`text-[10px] lg:text-xs font-bold mt-1 lg:mt-2 ${card.up ? 'text-green-600' : 'text-red-500'}`}>
+                {card.trend} <span className="hidden lg:inline font-normal text-gray-400 ml-1">{t('dash.lastMonth')}</span>
               </p>
             </div>
-          </div>
-          
-          <div className="bg-white p-6 rounded-[28px] border border-gray-100 shadow-sm flex items-center gap-5 hover:border-[#D97706]/20 hover:shadow-md transition-all group">
-            <div className="size-16 rounded-2xl bg-[#FEF3C7] text-[#D97706] flex items-center justify-center group-hover:scale-110 transition-transform">
-              <span className="material-symbols-outlined text-3xl">star</span>
-            </div>
-            <div>
-              <p className="text-xs text-gray-400 font-black uppercase tracking-wide mb-1">{t('buyer.loyaltyTier')}</p>
-              <p className="text-3xl font-black text-slate-800">{buyer.tier}</p>
-            </div>
-          </div>
-          
-          <div className="bg-white p-6 rounded-[28px] border border-gray-100 shadow-sm flex items-center gap-5 hover:border-[#059669]/20 hover:shadow-md transition-all group">
-            <div className="size-16 rounded-2xl bg-[#D1FAE5] text-[#059669] flex items-center justify-center group-hover:scale-110 transition-transform">
-              <span className="material-symbols-outlined text-3xl">payments</span>
-            </div>
-            <div>
-              <p className="text-xs text-gray-400 font-black uppercase tracking-wide mb-1">{t('buyer.totalSpend')}</p>
-              <p className="text-3xl font-black text-slate-800">{((buyer.totalSpend || 0)/1000).toFixed(1)}k <span className="text-sm text-gray-400 font-bold">ETB</span></p>
-            </div>
-          </div>
+          ))}
         </div>
       </section>
 
@@ -199,10 +215,10 @@ const BuyerDashboard: React.FC = () => {
         </div>
       </section>
 
-      {/* Recommended Products Section */}
+      {/* Product Section */}
       <section className="space-y-4">
         <div className="flex items-center justify-between px-1">
-          <h3 className="text-lg font-bold text-slate-900">{t('buyer.recommended')}</h3>
+          <h3 className="text-lg font-bold text-slate-900">Catalog</h3>
           <button onClick={() => navigate('/catalog')} className="text-[#00A3C4] text-xs font-black uppercase tracking-widest hover:underline">{t('buyer.seeAll')}</button>
         </div>
 
@@ -211,6 +227,7 @@ const BuyerDashboard: React.FC = () => {
             const totalStock = p.stock.mainWarehouse + p.stock.backRoom + p.stock.showRoom;
             const isOutOfStock = totalStock === 0;
             const isLowStock = totalStock > 0 && totalStock < p.reorderPoint;
+            const isRecommended = Boolean(p.recommended);
 
             return (
               <div 
@@ -233,6 +250,12 @@ const BuyerDashboard: React.FC = () => {
                 
                 <div className="flex-1">
                   <p className="text-[10px] font-black uppercase text-[#00A3C4] tracking-widest truncate">{p.brand}</p>
+                  {isRecommended && (
+                    <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-[#E0F7FA] px-2 py-1 text-[9px] font-black uppercase tracking-[0.2em] text-[#008CA8]">
+                      <span className="material-symbols-outlined text-[11px]">stars</span>
+                      {t('buyer.recommended')}
+                    </span>
+                  )}
                   <h4 className="font-bold text-slate-900 text-sm leading-tight line-clamp-2 h-9 mt-1 group-hover:text-[#00A3C4] transition-colors">{p.name}</h4>
                 </div>
 

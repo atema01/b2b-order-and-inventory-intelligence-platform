@@ -1,8 +1,9 @@
 
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { CreditRequest, Payment, Order, PaymentStatus } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
 
 const PaymentReview: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -16,6 +17,7 @@ const PaymentReview: React.FC = () => {
   const [isEditingStatus, setIsEditingStatus] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -32,9 +34,10 @@ const PaymentReview: React.FC = () => {
         }
         const paymentData = await paymentRes.json();
 
-        const [orderRes, creditRes] = await Promise.all([
+        const [orderRes, creditRes, creditListRes] = await Promise.all([
           paymentData?.orderId ? fetch(`/api/orders/${paymentData.orderId}`, { credentials: 'include' }) : Promise.resolve(null),
-          paymentData?.creditRequestId ? fetch(`/api/credits/${paymentData.creditRequestId}`, { credentials: 'include' }) : Promise.resolve(null)
+          paymentData?.creditRequestId ? fetch(`/api/credits/${paymentData.creditRequestId}`, { credentials: 'include' }) : Promise.resolve(null),
+          fetch('/api/credits', { credentials: 'include' })
         ]);
 
         let orderData: Order | null = null;
@@ -44,6 +47,11 @@ const PaymentReview: React.FC = () => {
         }
         if (creditRes?.ok) {
           creditData = await creditRes.json();
+        } else if (creditListRes?.ok && paymentData?.orderId) {
+          const creditList = await creditListRes.json().catch(() => []);
+          if (Array.isArray(creditList)) {
+            creditData = creditList.find((entry: CreditRequest) => entry.orderId === paymentData.orderId) || null;
+          }
         }
 
         if (!isMounted) return;
@@ -67,7 +75,12 @@ const PaymentReview: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [id]);
+  }, [id, refreshToken]);
+
+  useRealtimeEvent<{ paymentId?: string }>('realtime:payments', (detail) => {
+    if (!id || detail?.paymentId !== id) return;
+    setRefreshToken((value) => value + 1);
+  });
 
   if (loading) {
     return (
@@ -98,7 +111,7 @@ const PaymentReview: React.FC = () => {
   }
 
   if (!payment) return <div className="p-8">Payment not found.</div>;
-  const isCreditRepayment = Boolean(payment.creditRequestId);
+  const isCreditRepayment = Boolean(payment.creditRequestId || credit?.id);
   const expectedAmount = isCreditRepayment ? (credit?.outstandingAmount || credit?.approvedAmount || payment.amount) : order?.total;
 
   const handleAction = async (status: PaymentStatus) => {
@@ -155,6 +168,10 @@ const PaymentReview: React.FC = () => {
 
             <div className="grid grid-cols-2 gap-6">
               <div className="space-y-1">
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Associated Order</p>
+                <p className="font-bold text-slate-800">#{String(payment.orderId || '').replace('ORD-', '') || '---'}</p>
+              </div>
+              <div className="space-y-1">
                 <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('payments.expected')}</p>
                 <p className="text-xl font-black text-slate-800">ETB {expectedAmount?.toLocaleString() || '---'}</p>
               </div>
@@ -172,10 +189,27 @@ const PaymentReview: React.FC = () => {
               </div>
             </div>
 
+            {payment.orderId && (
+              <Link
+                to={`/orders/${payment.orderId}`}
+                className="inline-flex items-center gap-2 rounded-xl bg-slate-100 px-4 py-2 text-xs font-black uppercase tracking-widest text-slate-700 hover:bg-slate-200 transition-colors"
+              >
+                <span className="material-symbols-outlined text-sm">receipt_long</span>
+                Open Associated Order
+              </Link>
+            )}
+
             {isCreditRepayment && credit && (
               <div className="rounded-2xl bg-cyan-50 border border-cyan-100 p-4">
                 <p className="text-[10px] font-black uppercase tracking-widest text-cyan-600">Linked Credit</p>
                 <p className="mt-2 text-sm font-black text-slate-800">{credit.id}</p>
+                <Link
+                  to={`/credits/${credit.id}`}
+                  className="mt-2 inline-flex items-center gap-2 rounded-xl border border-cyan-200 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-widest text-cyan-700 hover:bg-cyan-50 transition-colors"
+                >
+                  <span className="material-symbols-outlined text-sm">open_in_new</span>
+                  Go to Credit
+                </Link>
                 <p className="mt-1 text-xs font-medium text-slate-600">
                   Status: {credit.status} • Approved: ETB {(credit.approvedAmount || 0).toLocaleString()} • Outstanding: ETB {(credit.outstandingAmount || 0).toLocaleString()}
                 </p>

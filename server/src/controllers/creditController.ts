@@ -2,6 +2,8 @@
 import { Request, Response } from 'express';
 import pool from '../config/db';
 import { logActivity } from '../utils/activityLog';
+import { createNotificationRecord } from '../services/notificationService';
+import { emitCreditChanged, emitOrderChanged, emitPaymentChanged } from '../services/realtime';
 
 const parseNumber = (value: any): number => {
   if (typeof value === 'number') return value;
@@ -66,26 +68,14 @@ const creditRequestSelect = `
   LEFT JOIN users u ON u.id = cr.buyer_id
 `;
 
-const createNotification = async (
-  type: string,
-  title: string,
-  message: string,
-  severity: 'low' | 'medium' | 'high',
-  recipientId: string,
-  relatedId?: string
-) => {
-  await pool.query(
-    `INSERT INTO notifications (type, title, message, time, is_read, severity, recipient_id, related_id)
-     VALUES ($1, $2, $3, $4, false, $5, $6, $7)`,
-    [type, title, message, new Date().toISOString(), severity, recipientId, relatedId || null]
-  );
-};
-
 const getOrderPaymentStatus = (amountPaid: number, total: number): 'Unpaid' | 'Partially Paid' | 'Paid' => {
   if (amountPaid <= 0) return 'Unpaid';
   if (amountPaid >= total) return 'Paid';
   return 'Partially Paid';
 };
+
+const generateEntityId = (prefix: string): string =>
+  `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
 
 // GET /api/credits/:id
 export const getCreditRequestById = async (req: Request, res: Response) => {
@@ -221,7 +211,7 @@ export const createCreditRequest = async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'buyerId is required' });
   }
 
-  const creditId = `CR-${Date.now().toString().slice(-6)}`;
+  const creditId = generateEntityId('CR');
   const client = await pool.connect();
 
   try {
@@ -284,7 +274,7 @@ export const createCreditRequest = async (req: Request, res: Response) => {
     );
 
     // Notify internal team that a new credit request is waiting for review.
-    await createNotification(
+    await createNotificationRecord(
       'Payment',
       'Credit Request Submitted',
       `Credit request ${creditId} was submitted.`,
@@ -293,6 +283,13 @@ export const createCreditRequest = async (req: Request, res: Response) => {
       creditId
     );
 
+    emitCreditChanged({
+      action: 'created',
+      creditRequestId: creditId,
+      buyerId: String(targetBuyerId),
+      orderId: orderId || undefined,
+      status: 'Pending'
+    });
     res.status(201).json(buildCreditRequest(result.rows[0]));
   } catch (err) {
     await client.query('ROLLBACK');
@@ -375,10 +372,13 @@ export const updateCreditRequest = async (req: Request, res: Response) => {
     let orderTotal = 0;
     let currentOrderPaid = 0;
     let nextOrderPaid = 0;
+    let currentOrderStatus = '';
+    let currentOrderHistory: any[] = [];
+    let orderStatusEventPayload: { orderId: string; buyerId: string; status: string } | null = null;
 
     if (orderId) {
       const orderResult = await client.query(
-        `SELECT id, buyer_id, total, amount_paid
+        `SELECT id, buyer_id, total, amount_paid, status, history
          FROM orders
          WHERE id = $1
          FOR UPDATE`,
@@ -395,6 +395,8 @@ export const updateCreditRequest = async (req: Request, res: Response) => {
       orderTotal = parseNumber(linkedOrder.total);
       currentOrderPaid = parseNumber(linkedOrder.amount_paid);
       nextOrderPaid = Math.min(orderTotal, Math.max(0, currentOrderPaid + creditDelta));
+      currentOrderStatus = String(linkedOrder.status || '');
+      currentOrderHistory = Array.isArray(linkedOrder.history) ? linkedOrder.history : [];
     }
 
     const result = await client.query(
@@ -426,14 +428,46 @@ export const updateCreditRequest = async (req: Request, res: Response) => {
     }
 
     if (orderId) {
-      await client.query(
-        `UPDATE orders
-         SET amount_paid = $1,
-             payment_status = $2,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $3`,
-        [nextOrderPaid, getOrderPaymentStatus(nextOrderPaid, orderTotal), orderId]
-      );
+      const shouldReleaseOrder =
+        currentOrderStatus.trim().toUpperCase() === 'ON REVIEW' &&
+        nextOrderPaid >= orderTotal;
+
+      if (shouldReleaseOrder) {
+        const updatedHistory = [
+          ...currentOrderHistory,
+          {
+            status: 'Pending',
+            date: new Date().toLocaleString(),
+            note: `Credit request ${id} approved enough to release the order.`
+          }
+        ];
+
+        await client.query(
+          `UPDATE orders
+           SET amount_paid = $1,
+               payment_status = $2,
+               status = 'Pending',
+               history = $3,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $4`,
+          [nextOrderPaid, getOrderPaymentStatus(nextOrderPaid, orderTotal), JSON.stringify(updatedHistory), orderId]
+        );
+
+        orderStatusEventPayload = {
+          orderId: String(orderId),
+          buyerId: String(orderBuyerId),
+          status: 'Pending'
+        };
+      } else {
+        await client.query(
+          `UPDATE orders
+           SET amount_paid = $1,
+               payment_status = $2,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $3`,
+          [nextOrderPaid, getOrderPaymentStatus(nextOrderPaid, orderTotal), orderId]
+        );
+      }
 
       if (nextContributed > 0 || previousContributed > 0) {
         const creditPaymentId = `PAY-${id.replace(/^CR-/, 'CRD-')}`;
@@ -489,6 +523,15 @@ export const updateCreditRequest = async (req: Request, res: Response) => {
 
     await client.query('COMMIT');
 
+    if (orderStatusEventPayload) {
+      emitOrderChanged({
+        action: 'status-updated',
+        orderId: orderStatusEventPayload.orderId,
+        buyerId: orderStatusEventPayload.buyerId,
+        status: orderStatusEventPayload.status
+      });
+    }
+
     await logActivity(
       req,
       'Update Credit Request',
@@ -497,7 +540,7 @@ export const updateCreditRequest = async (req: Request, res: Response) => {
     );
 
     // Notify buyer when credit request status changes.
-    await createNotification(
+    await createNotificationRecord(
       'Payment',
       `Credit Request ${status}`,
       `Your credit request ${id} is now ${status}.`,
@@ -505,6 +548,25 @@ export const updateCreditRequest = async (req: Request, res: Response) => {
       String(existing.buyer_id),
       String(id)
     );
+
+    emitCreditChanged({
+      action: 'updated',
+      creditRequestId: String(id),
+      buyerId: String(existing.buyer_id),
+      orderId: orderId || undefined,
+      status
+    });
+
+    if (orderId && (nextContributed > 0 || previousContributed > 0)) {
+      emitPaymentChanged({
+        action: 'updated',
+        paymentId: `PAY-${id.replace(/^CR-/, 'CRD-')}`,
+        orderId,
+        buyerId: String(existing.buyer_id),
+        creditRequestId: String(id),
+        status: nextContributed > 0 ? 'Approved' : 'Rejected'
+      });
+    }
 
     res.json(buildCreditRequest(result.rows[0]));
   } catch (err) {
@@ -520,7 +582,7 @@ export const updateCreditRequest = async (req: Request, res: Response) => {
 export const repayCreditRequest = async (req: Request, res: Response) => {
   const userRole = (req as any).user?.role;
   const userId = (req as any).user?.userId;
-  const { id } = req.params;
+  const id = String(req.params.id || '');
   const { amount, note, referenceId, proofImage } = req.body || {};
   const repaymentAmount = parseNumber(amount);
   const trimmedNote = String(note || '').trim();
@@ -599,7 +661,7 @@ export const repayCreditRequest = async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Only credits linked to an order can be repaid through the payment review flow' });
     }
 
-    const paymentId = `PAY-${Date.now().toString().slice(-6)}`;
+    const paymentId = generateEntityId('PAY');
     const paymentNote = trimmedNote || null;
 
     const paymentResult = await client.query(
@@ -628,7 +690,7 @@ export const repayCreditRequest = async (req: Request, res: Response) => {
       `Credit repayment ${paymentId} submitted for credit request ${id}.`
     );
 
-    await createNotification(
+    await createNotificationRecord(
       'Payment',
       'Credit Repayment Submitted',
       `A repayment of ETB ${repaymentAmount.toLocaleString()} was submitted for credit ${id} and is waiting for review.`,
@@ -637,6 +699,21 @@ export const repayCreditRequest = async (req: Request, res: Response) => {
       paymentId
     );
 
+    emitCreditChanged({
+      action: 'repaid',
+      creditRequestId: String(id),
+      buyerId: String(existing.buyer_id),
+      orderId: String(existing.order_id),
+      status: String(existing.status)
+    });
+    emitPaymentChanged({
+      action: 'created',
+      paymentId,
+      orderId: String(existing.order_id),
+      buyerId: String(existing.buyer_id),
+      creditRequestId: String(id),
+      status: 'Pending Review'
+    });
     res.status(201).json({
       message: 'Credit repayment submitted for review',
       payment: paymentResult.rows[0]

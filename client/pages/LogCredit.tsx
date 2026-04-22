@@ -182,7 +182,7 @@ const LogCredit: React.FC = () => {
                   </div>
                   <div>
                     <p className="text-xs font-black text-slate-800">{selectedBuyer.contactPerson}</p>
-                    <p className="text-[10px] text-gray-400 font-bold uppercase">{t('credits.currentCredit')}: ETB {selectedBuyer.availableCredit.toLocaleString()}</p>
+                    <p className="text-[10px] text-gray-400 font-bold uppercase">{selectedBuyer.companyName}</p>
                   </div>
                 </div>
               )}

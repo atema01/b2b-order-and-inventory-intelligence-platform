@@ -1,10 +1,14 @@
 ﻿
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Order, Product, OrderStatus } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingState from '../components/LoadingState';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
+import RefreshIndicator from '../components/RefreshIndicator';
+import { buyerQueryKeys, loadBuyerOrderDetails, normalizeBuyerOrderStatus } from '../services/buyerQueries';
 
 const BuyerOrderDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -12,10 +16,7 @@ const BuyerOrderDetails: React.FC = () => {
   const location = useLocation();
   const { t } = useLanguage();
   const { user } = useAuth();
-  const [order, setOrder] = useState<Order | null>(null);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
+  const queryClient = useQueryClient();
   
   // Credit Request State
   const [isCreditModalOpen, setIsCreditModalOpen] = useState(false);
@@ -28,75 +29,61 @@ const BuyerOrderDetails: React.FC = () => {
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const query = new URLSearchParams(location.search).get('q')?.trim().toLowerCase() || '';
+  const {
+    data,
+    isLoading,
+    isFetching,
+    error
+  } = useQuery({
+    queryKey: buyerQueryKeys.orderDetails(id, user?.id),
+    queryFn: () => loadBuyerOrderDetails(id, user?.id)
+  });
+  const order = data?.order ?? null;
+  const products = data?.products ?? [];
 
   useEffect(() => {
-    let isMounted = true;
+    if (!order) return;
+    setCreditAmount(order.total - (order.amountPaid || 0));
+  }, [order]);
 
-    const loadOrderDetails = async () => {
-      if (!id || !user?.id) {
-        setIsLoading(false);
-        return;
-      }
+  useRealtimeEvent<{ orderId?: string; buyerId?: string }>('realtime:orders', (detail) => {
+    if (!id || detail?.orderId !== id) return;
+    if (user?.id && detail?.buyerId && detail.buyerId !== user.id) return;
+    queryClient.invalidateQueries({ queryKey: ['buyer-order-details'] });
+  });
 
-      setIsLoading(true);
-      setError('');
+  useRealtimeEvent<{ orderId?: string; buyerId?: string }>('realtime:payments', (detail) => {
+    if (!id || detail?.orderId !== id) return;
+    if (user?.id && detail?.buyerId && detail.buyerId !== user.id) return;
+    queryClient.invalidateQueries({ queryKey: ['buyer-order-details'] });
+  });
 
-      try {
-        const [orderRes, productsRes] = await Promise.all([
-          fetch(`/api/orders/${id}`, { credentials: 'include' }),
-          fetch('/api/products', { credentials: 'include' })
-        ]);
-
-        if (!orderRes.ok) {
-          throw new Error('Failed to load order');
-        }
-
-        const orderData = await orderRes.json();
-        const productsData = productsRes.ok ? await productsRes.json() : [];
-        const productsArray = Array.isArray(productsData) ? productsData : (productsData?.data || []);
-
-        if (!orderData || orderData.buyerId !== user.id) {
-          throw new Error('Order not found');
-        }
-
-        if (!isMounted) return;
-
-        setOrder(orderData);
-        setProducts(productsArray);
-        setCreditAmount(orderData.total - (orderData.amountPaid || 0));
-      } catch (err) {
-        console.error('Failed to load order details:', err);
-        if (isMounted) {
-          setError('Failed to load order details.');
-        }
-      } finally {
-        if (isMounted) setIsLoading(false);
-      }
-    };
-
-    loadOrderDetails();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [id, user?.id]);
+  useRealtimeEvent<{ orderId?: string; buyerId?: string }>('realtime:credits', (detail) => {
+    if (!id || detail?.orderId !== id) return;
+    if (user?.id && detail?.buyerId && detail.buyerId !== user.id) return;
+    queryClient.invalidateQueries({ queryKey: ['buyer-order-details'] });
+  });
 
   if (isLoading) return <LoadingState message="Loading order details..." />;
-  if (error) return <div className="p-8 text-red-600 font-semibold">{error}</div>;
+  if (error) {
+    return (
+      <div className="p-8">
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-center">
+          <p className="mb-2 font-semibold text-red-700">Failed to load order details.</p>
+          <p className="mb-4 text-sm text-red-600">{error instanceof Error ? error.message : 'An unexpected error occurred.'}</p>
+          <button
+            onClick={() => queryClient.invalidateQueries({ queryKey: buyerQueryKeys.orderDetails(id, user?.id) })}
+            className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-red-700"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (!order) return <div className="p-8">Order not found.</div>;
 
-  const normalizeStatus = (status: OrderStatus | string) => {
-    const value = status?.toString().trim().toUpperCase() || '';
-    if (value === 'DRAFT') return OrderStatus.DRAFT;
-    if (value === 'PENDING') return OrderStatus.PENDING;
-    if (value === 'PROCESSING') return OrderStatus.PROCESSING;
-    if (value === 'SHIPPED') return OrderStatus.SHIPPED;
-    if (value === 'DELIVERED') return OrderStatus.DELIVERED;
-    if (value === 'UNDELIVERED') return OrderStatus.UNDELIVERED;
-    if (value === 'CANCELLED' || value === 'CANCELED') return OrderStatus.CANCELLED;
-    if (value === 'DELETED') return OrderStatus.DELETED;
-    return value as OrderStatus;
-  };
+  const normalizeStatus = normalizeBuyerOrderStatus;
 
   const normalizedStatus = normalizeStatus(order.status);
   const isDelivered = normalizedStatus === OrderStatus.DELIVERED;
@@ -149,6 +136,10 @@ const BuyerOrderDetails: React.FC = () => {
       .then(res => {
         if (!res.ok) throw new Error('Failed to submit credit request');
         setIsCreditModalOpen(false);
+        queryClient.invalidateQueries({ queryKey: ['buyer-order-details'] });
+        queryClient.invalidateQueries({ queryKey: ['buyer-credit-list'] });
+        queryClient.invalidateQueries({ queryKey: ['buyer-orders'] });
+        queryClient.invalidateQueries({ queryKey: ['buyer-dashboard'] });
         alert('Credit request submitted successfully. Once approved, the amount will be added to your credit balance.');
         navigate('/credit');
       })
@@ -189,6 +180,8 @@ const BuyerOrderDetails: React.FC = () => {
     })
       .then(res => {
         if (!res.ok) throw new Error('Failed to create reorder draft');
+        queryClient.invalidateQueries({ queryKey: ['buyer-orders'] });
+        queryClient.invalidateQueries({ queryKey: ['buyer-catalog'] });
         navigate('/orders');
         alert(`Reorder draft #${newOrder.id} created.`);
       })
@@ -204,34 +197,7 @@ const BuyerOrderDetails: React.FC = () => {
 
   const handlePlaceOrder = () => {
     if (!order) return;
-    const updatedOrder: Order = {
-        ...order,
-        status: 'Pending' as OrderStatus,
-        history: [...order.history, { 
-            status: 'Order Placed', 
-            date: new Date().toLocaleString(), 
-            note: 'Draft confirmed and submitted' 
-        }]
-    };
-    fetch(`/api/orders/${order.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({
-        ...updatedOrder,
-        status: 'Pending'
-      })
-    })
-      .then(res => {
-        if (!res.ok) throw new Error('Failed to place order');
-        setOrder(updatedOrder);
-        alert(`Order #${order.id.replace('ORD-', '')} placed successfully!`);
-        navigate('/orders');
-      })
-      .catch(err => {
-        console.error('Place order error:', err);
-        alert('Failed to place order.');
-      });
+    navigate(`/payment?draftId=${order.id}`);
   };
 
   const handleDeleteOrder = () => {
@@ -244,6 +210,9 @@ const BuyerOrderDetails: React.FC = () => {
     })
       .then(res => {
         if (!res.ok) throw new Error('Failed to delete order');
+        queryClient.invalidateQueries({ queryKey: ['buyer-order-details'] });
+        queryClient.invalidateQueries({ queryKey: ['buyer-orders'] });
+        queryClient.invalidateQueries({ queryKey: ['buyer-dashboard'] });
         navigate('/orders');
       })
       .catch(err => {
@@ -268,6 +237,9 @@ const BuyerOrderDetails: React.FC = () => {
       .then(res => {
         if (!res.ok) throw new Error('Failed to cancel order');
         setIsCancelModalOpen(false);
+        queryClient.invalidateQueries({ queryKey: ['buyer-order-details'] });
+        queryClient.invalidateQueries({ queryKey: ['buyer-orders'] });
+        queryClient.invalidateQueries({ queryKey: ['buyer-dashboard'] });
         alert("Order has been cancelled.");
         navigate('/orders');
       })
@@ -283,6 +255,7 @@ const BuyerOrderDetails: React.FC = () => {
 
   const getStatusColor = (status: OrderStatus) => {
     switch(normalizeStatus(status)) {
+      case OrderStatus.ON_REVIEW: return 'bg-cyan-100 text-cyan-800';
       case OrderStatus.PENDING: return 'bg-amber-100 text-amber-800';
       case OrderStatus.PROCESSING: return 'bg-blue-100 text-blue-800';
       case OrderStatus.SHIPPED: return 'bg-purple-100 text-purple-800';
@@ -326,7 +299,7 @@ const BuyerOrderDetails: React.FC = () => {
           <span className="material-symbols-outlined">arrow_back</span>
         </button>
         <div>
-          <h1 className="text-2xl font-black text-slate-900">Order #{order.id.replace('ORD-', '')}</h1>
+          <h1 className="text-2xl font-black text-slate-900">Order #{order.id}</h1>
           <div className="flex items-center gap-2 mt-1">
              <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wide ${getStatusColor(order.status)}`}>
                {normalizeStatus(order.status)}
@@ -334,6 +307,7 @@ const BuyerOrderDetails: React.FC = () => {
              <span className="text-xs font-bold text-gray-400">{order.date}</span>
           </div>
         </div>
+        <RefreshIndicator visible={isFetching && !isLoading} />
       </div>
 
       {/* Payment Progress Card (If not draft/cancelled/deleted) */}
@@ -469,10 +443,10 @@ const BuyerOrderDetails: React.FC = () => {
                    className="flex-1 py-4 bg-[#00A3C4] hover:bg-[#008CA8] text-white rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-[#00A3C4]/20 active:scale-95 transition-all flex items-center justify-center gap-2"
                  >
                    <span className="material-symbols-outlined">shopping_bag</span>
-                   {t('buyer.placeOrder')}
-                 </button>
-               </>
-             )}
+                  Proceed to Payment
+                </button>
+              </>
+            )}
            </div>
         </div>
       )}

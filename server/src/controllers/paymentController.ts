@@ -2,6 +2,8 @@
 import { Request, Response } from 'express';
 import pool from '../config/db';
 import { logActivity } from '../utils/activityLog';
+import { createNotificationRecord } from '../services/notificationService';
+import { emitOrderChanged, emitPaymentChanged } from '../services/realtime';
 
 const parseNumber = (value: any): number => {
   if (typeof value === 'number') return value;
@@ -26,45 +28,55 @@ const buildPayment = (row: any) => ({
   notes: row.notes || ''
 });
 
-const createNotification = async (
-  type: string,
-  title: string,
-  message: string,
-  severity: 'low' | 'medium' | 'high',
-  recipientId: string,
-  relatedId?: string
-) => {
-  await pool.query(
-    `INSERT INTO notifications (type, title, message, time, is_read, severity, recipient_id, related_id)
-     VALUES ($1, $2, $3, $4, false, $5, $6, $7)`,
-    [type, title, message, new Date().toISOString(), severity, recipientId, relatedId || null]
-  );
-};
-
 const getOrderPaymentStatus = (amountPaid: number, total: number): 'Unpaid' | 'Partially Paid' | 'Paid' => {
   if (amountPaid <= 0) return 'Unpaid';
   if (amountPaid >= total) return 'Paid';
   return 'Partially Paid';
 };
 
+const generatePaymentId = (): string =>
+  `PAY-${Date.now()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+
+const normalizeOrderStatus = (value: any): string => {
+  if (typeof value !== 'string') return '';
+  const normalized = value.trim().toUpperCase();
+  if (normalized === 'ON_REVIEW' || normalized === 'ON REVIEW') return 'On Review';
+  if (normalized === 'PENDING') return 'Pending';
+  return value;
+};
+
 // GET /api/payments
 export const getAllPayments = async (req: Request, res: Response) => {
   const userRole = (req as any).user?.role;
-  if (userRole === 'R-BUYER') {
-    return res.status(403).json({ error: 'Insufficient permissions' });
-  }
+  const userId = (req as any).user?.userId;
 
   try {
     const creditRequestId = String(req.query.creditRequestId || '').trim();
+    const orderId = String(req.query.orderId || '').trim();
     const params: any[] = [];
+    const where: string[] = [];
     let sql = `
       SELECT id, order_id, buyer_id, credit_request_id, amount, method, reference_id, date_time, proof_image, status, notes
       FROM payments
     `;
 
+    if (userRole === 'R-BUYER') {
+      params.push(userId);
+      where.push(`buyer_id = $${params.length}`);
+    }
+
+    if (orderId) {
+      params.push(orderId);
+      where.push(`order_id = $${params.length}`);
+    }
+
     if (creditRequestId) {
       params.push(creditRequestId);
-      sql += ` WHERE credit_request_id = $1`;
+      where.push(`credit_request_id = $${params.length}`);
+    }
+
+    if (where.length > 0) {
+      sql += ` WHERE ${where.join(' AND ')}`;
     }
 
     sql += ` ORDER BY date_time DESC`;
@@ -80,11 +92,9 @@ export const getAllPayments = async (req: Request, res: Response) => {
 // GET /api/payments/:id
 export const getPaymentById = async (req: Request, res: Response) => {
   const userRole = (req as any).user?.role;
-  if (userRole === 'R-BUYER') {
-    return res.status(403).json({ error: 'Insufficient permissions' });
-  }
+  const userId = (req as any).user?.userId;
 
-  const { id } = req.params;
+  const id = String(req.params.id || '');
   try {
     const result = await pool.query(
       `SELECT id, order_id, buyer_id, credit_request_id, amount, method, reference_id, date_time, proof_image, status, notes
@@ -94,6 +104,9 @@ export const getPaymentById = async (req: Request, res: Response) => {
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Payment not found' });
+    }
+    if (userRole === 'R-BUYER' && String(result.rows[0].buyer_id) !== String(userId)) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
     }
     res.json(buildPayment(result.rows[0]));
   } catch (err) {
@@ -139,6 +152,9 @@ export const createPayment = async (req: Request, res: Response) => {
 
     if (payAmount <= 0) {
       return res.status(400).json({ error: 'Payment amount must be greater than zero' });
+    }
+    if (!Number.isFinite(payAmount)) {
+      return res.status(400).json({ error: 'Payment amount must be a valid number' });
     }
 
     if (!creditRequestId && payAmount > remaining) {
@@ -186,7 +202,7 @@ export const createPayment = async (req: Request, res: Response) => {
       resolvedCreditRequestId = String(credit.id);
     }
 
-    const paymentId = `PAY-${Date.now().toString().slice(-6)}`;
+    const paymentId = generatePaymentId();
 
     const result = await pool.query(
       `INSERT INTO payments (
@@ -214,7 +230,7 @@ export const createPayment = async (req: Request, res: Response) => {
     );
 
     // Notify internal team that a buyer submitted a new payment proof for review.
-    await createNotification(
+    await createNotificationRecord(
       'Payment',
       resolvedCreditRequestId ? 'Credit Repayment Submitted' : 'Payment Proof Submitted',
       resolvedCreditRequestId
@@ -225,6 +241,14 @@ export const createPayment = async (req: Request, res: Response) => {
       resolvedCreditRequestId || paymentId
     );
 
+    emitPaymentChanged({
+      action: 'created',
+      paymentId,
+      orderId,
+      buyerId: String(order.buyer_id),
+      creditRequestId: resolvedCreditRequestId || undefined,
+      status: 'Pending Review'
+    });
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error('Create payment error:', err);
@@ -256,6 +280,7 @@ export const updatePaymentStatus = async (req: Request, res: Response) => {
 
   try {
     await client.query('BEGIN');
+    let orderStatusEventPayload: { orderId: string; buyerId: string; status: string } | null = null;
 
     const paymentResult = await client.query(
       `SELECT id, order_id, buyer_id, credit_request_id, amount, status
@@ -351,7 +376,7 @@ export const updatePaymentStatus = async (req: Request, res: Response) => {
       }
     } else {
       const orderResult = await client.query(
-        'SELECT id, total, amount_paid FROM orders WHERE id = $1 FOR UPDATE',
+        'SELECT id, buyer_id, total, amount_paid, status, history FROM orders WHERE id = $1 FOR UPDATE',
         [payment.order_id]
       );
       if (orderResult.rows.length === 0) {
@@ -362,6 +387,7 @@ export const updatePaymentStatus = async (req: Request, res: Response) => {
       const order = orderResult.rows[0];
       const total = parseNumber(order.total);
       const currentPaid = parseNumber(order.amount_paid);
+      const currentOrderStatus = normalizeOrderStatus(order.status);
       let newPaid = currentPaid;
 
       if (!wasApproved && willBeApproved) {
@@ -370,14 +396,43 @@ export const updatePaymentStatus = async (req: Request, res: Response) => {
         newPaid = Math.max(0, currentPaid - payAmount);
       }
 
-      await client.query(
-        `UPDATE orders
-         SET amount_paid = $1,
-             payment_status = $2,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE id = $3`,
-        [newPaid, getOrderPaymentStatus(newPaid, total), order.id]
-      );
+      if (!wasApproved && willBeApproved && currentOrderStatus === 'On Review' && newPaid >= total) {
+        const currentHistory = Array.isArray(order.history) ? order.history : [];
+        const updatedHistory = [
+          ...currentHistory,
+          {
+            status: 'Pending',
+            date: new Date().toLocaleString(),
+            note: `Payment ${id} approved. Order moved to pending queue.`
+          }
+        ];
+
+        await client.query(
+          `UPDATE orders
+           SET amount_paid = $1,
+               payment_status = $2,
+               status = 'Pending',
+               history = $3,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $4`,
+          [newPaid, getOrderPaymentStatus(newPaid, total), JSON.stringify(updatedHistory), order.id]
+        );
+
+        orderStatusEventPayload = {
+          orderId: String(order.id),
+          buyerId: String(order.buyer_id),
+          status: 'Pending'
+        };
+      } else {
+        await client.query(
+          `UPDATE orders
+           SET amount_paid = $1,
+               payment_status = $2,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $3`,
+          [newPaid, getOrderPaymentStatus(newPaid, total), order.id]
+        );
+      }
     }
 
     const updatedPayment = await client.query(
@@ -397,7 +452,7 @@ export const updatePaymentStatus = async (req: Request, res: Response) => {
     );
 
     // Notify buyer when payment review is completed or revised.
-    await createNotification(
+    await createNotificationRecord(
       'Payment',
       payment.credit_request_id ? `Credit Repayment ${status}` : `Payment ${status}`,
       payment.credit_request_id
@@ -409,6 +464,22 @@ export const updatePaymentStatus = async (req: Request, res: Response) => {
     );
 
     await client.query('COMMIT');
+    if (orderStatusEventPayload) {
+      emitOrderChanged({
+        action: 'status-updated',
+        orderId: orderStatusEventPayload.orderId,
+        buyerId: orderStatusEventPayload.buyerId,
+        status: orderStatusEventPayload.status
+      });
+    }
+    emitPaymentChanged({
+      action: 'updated',
+      paymentId: String(id),
+      orderId: String(payment.order_id),
+      buyerId: String(payment.buyer_id),
+      creditRequestId: payment.credit_request_id || undefined,
+      status
+    });
     res.json(buildPayment(updatedPayment.rows[0]));
   } catch (err) {
     await client.query('ROLLBACK');

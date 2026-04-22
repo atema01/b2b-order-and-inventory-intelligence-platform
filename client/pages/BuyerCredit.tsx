@@ -1,9 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { CreditRequest } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingState from '../components/LoadingState';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
+import RefreshIndicator from '../components/RefreshIndicator';
+import { buyerQueryKeys, loadBuyerCreditList } from '../services/buyerQueries';
 
 const formatCurrency = (amount: number) => `ETB ${amount.toLocaleString()}`;
 
@@ -11,48 +15,27 @@ const BuyerCredit: React.FC = () => {
   const { t } = useLanguage();
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [requests, setRequests] = useState<CreditRequest[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
+  const queryClient = useQueryClient();
+  const {
+    data: requests = [],
+    isLoading,
+    isFetching,
+    error
+  } = useQuery({
+    queryKey: buyerQueryKeys.creditList(user?.id),
+    queryFn: () => loadBuyerCreditList(user?.id)
+  });
 
-  useEffect(() => {
-    let isMounted = true;
+  useRealtimeEvent<{ buyerId?: string }>('realtime:credits', (detail) => {
+    if (!user?.id || (detail?.buyerId && detail.buyerId !== user.id)) return;
+    queryClient.invalidateQueries({ queryKey: ['buyer-credit-list'] });
+  });
 
-    const loadCreditData = async () => {
-      if (!user?.id) {
-        setIsLoading(false);
-        return;
-      }
-
-      setIsLoading(true);
-      setError('');
-
-      try {
-        const creditRes = await fetch('/api/credits/my', { credentials: 'include' });
-        if (!creditRes.ok) {
-          throw new Error('Failed to load credit requests');
-        }
-
-        const creditData = await creditRes.json();
-        if (!isMounted) return;
-        setRequests(Array.isArray(creditData) ? creditData : []);
-      } catch (err) {
-        console.error('Failed to load credit data:', err);
-        if (isMounted) {
-          setError('Failed to load credit details.');
-        }
-      } finally {
-        if (isMounted) setIsLoading(false);
-      }
-    };
-
-    loadCreditData();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [user?.id]);
+  useRealtimeEvent<{ buyerId?: string }>('realtime:payments', (detail) => {
+    if (!user?.id || (detail?.buyerId && detail.buyerId !== user.id)) return;
+    queryClient.invalidateQueries({ queryKey: ['buyer-credit-list'] });
+  });
 
   const summary = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
@@ -98,12 +81,30 @@ const BuyerCredit: React.FC = () => {
   }, [requests, searchQuery]);
 
   if (isLoading) return <LoadingState message="Loading credit details..." />;
-  if (error) return <div className="p-8 text-red-600 font-semibold">{error}</div>;
+  if (error) {
+    return (
+      <div className="p-8">
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-center">
+          <p className="mb-2 font-semibold text-red-700">Failed to load credit details.</p>
+          <p className="mb-4 text-sm text-red-600">{error instanceof Error ? error.message : 'An unexpected error occurred.'}</p>
+          <button
+            onClick={() => queryClient.invalidateQueries({ queryKey: buyerQueryKeys.creditList(user?.id) })}
+            className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-red-700"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 lg:p-8 max-w-6xl mx-auto space-y-8 pb-32">
       <div className="space-y-1">
-        <h1 className="text-2xl lg:text-3xl font-black text-slate-900 tracking-tight">{t('nav.financials')}</h1>
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="text-2xl lg:text-3xl font-black text-slate-900 tracking-tight">{t('nav.financials')}</h1>
+          <RefreshIndicator visible={isFetching && !isLoading} />
+        </div>
         <p className="text-slate-500 font-medium">Review your approved credit, repayments, and outstanding balances.</p>
       </div>
 

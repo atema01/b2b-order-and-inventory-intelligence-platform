@@ -13,7 +13,6 @@ CREATE TABLE IF NOT EXISTS users (
   -- Buyer-specific (nullable for non-buyers)
   company_name VARCHAR(255),
   address TEXT,
-  credit_limit NUMERIC(12,2) DEFAULT 0,
   available_credit NUMERIC(12,2) DEFAULT 0,
   outstanding_balance NUMERIC(12,2) DEFAULT 0,
   payment_terms VARCHAR(100),

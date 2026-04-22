@@ -1,12 +1,11 @@
-// src/server.ts
-// Purpose: Entry point of the backend — sets up Express app and starts server
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
-import pool from './config/db';
 import cookieParser from 'cookie-parser';
+import http from 'http';
+import pool from './config/db';
 import authRoutes from './routes/authRoutes';
 import productRoutes from './routes/productRoutes';
 import orderRoutes from './routes/orderRoutes';
@@ -23,13 +22,14 @@ import creditRoutes from './routes/creditRoutes';
 import paymentRoutes from './routes/paymentRoutes';
 import pricingRoutes from './routes/pricingRoutes';
 import { ensureFinanceSchema } from './utils/ensureFinanceSchema';
+import { ensureForecastSchema } from './utils/ensureForecastSchema';
+import { startForecastScheduler } from './services/forecastScheduler';
+import { initializeRealtime } from './services/realtime';
 
-
-// Load environment variables
 dotenv.config();
 
-// Initialize Express app
 const app = express();
+const httpServer = http.createServer(app);
 const PORT = process.env.PORT || 5000;
 const isProduction = process.env.NODE_ENV === 'production';
 const allowedOrigins = (process.env.CORS_ORIGIN || '')
@@ -42,33 +42,25 @@ if (!isProduction) {
   allowedOrigins.push('http://localhost:5173');
 }
 
-// ======================
-// Middleware Setup
-// ======================
-
-// Security: Sets various HTTP headers to protect against common attacks
 app.use(helmet());
 app.set('trust proxy', 1);
 
-// Enable CORS: Allows your React frontend (on :5173) to call this backend
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow server-to-server, health checks, and same-origin requests with no origin header.
     if (!origin) return callback(null, true);
     if (allowedOrigins.includes(origin)) return callback(null, true);
     return callback(new Error(`CORS blocked for origin: ${origin}`));
   },
-  credentials: true, // Needed if using cookies (we will)
+  credentials: true
 }));
 
-// Logging: Logs every request in development
 if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
 
-// Parse JSON bodies (for POST/PUT requests)
 app.use(express.json({ limit: '10mb' }));
-app.use(cookieParser()); 
+app.use(cookieParser());
+
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
@@ -84,24 +76,15 @@ app.use('/api/permissions', permissionRoutes);
 app.use('/api/credits', creditRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/pricing', pricingRoutes);
-// After all routes, before app.listen
-app.use((req, res) => {
-  res.status(404).json({ error: 'Route not found', requested: req.originalUrl });
-});
-// ======================
-// Basic Routes (for testing)
-// ======================
 
-// Health check endpoint — confirms server is running
 app.get('/api', (req, res) => {
-  res.json({ 
+  res.json({
     message: 'B2B Platform API is running!',
     timestamp: new Date().toISOString(),
-    dbConnected: pool ? true : false
+    dbConnected: Boolean(pool)
   });
 });
 
-// Test DB connection endpoint
 app.get('/api/test-db', async (req, res) => {
   try {
     const result = await pool.query('SELECT NOW() AS now');
@@ -112,21 +95,27 @@ app.get('/api/test-db', async (req, res) => {
   }
 });
 
-// ======================
-// Start Server
-// ======================
+app.use((req, res) => {
+  res.status(404).json({ error: 'Route not found', requested: req.originalUrl });
+});
 
 const startServer = async () => {
   try {
     await ensureFinanceSchema();
     console.log('Finance schema verified');
 
-    app.listen(PORT, () => {
-      console.log(`🚀 Server running on http://localhost:${PORT}`);
-      console.log(`📡 Health check: http://localhost:${PORT}/api`);
+    await ensureForecastSchema();
+    console.log('Forecast schema verified');
+
+    initializeRealtime(httpServer, allowedOrigins);
+
+    httpServer.listen(PORT, () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+      console.log(`Health check: http://localhost:${PORT}/api`);
+      startForecastScheduler();
     });
   } catch (err) {
-    console.error('Failed to verify finance schema:', err);
+    console.error('Failed to verify server schema:', err);
     process.exit(1);
   }
 };

@@ -1,102 +1,51 @@
 
 import React, { useState, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Order, OrderStatus, Buyer, Product } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../contexts/LanguageContext';
 import { printInvoice } from '../utils/printInvoice';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingState from '../components/LoadingState';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
+import RefreshIndicator from '../components/RefreshIndicator';
+import { buyerQueryKeys, loadBuyerOrdersData, normalizeBuyerOrderStatus } from '../services/buyerQueries';
 
 const BuyerOrders: React.FC = () => {
   const navigate = useNavigate();
   const { t } = useLanguage();
   const { user } = useAuth();
-  const [orders, setOrders] = useState<Order[]>([]);
   const [filteredOrders, setFilteredOrders] = useState<Order[]>([]);
   const [activeStatus, setActiveStatus] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState('');
-  const [buyer, setBuyer] = useState<Buyer | null>(null);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
+  const queryClient = useQueryClient();
+  const {
+    data,
+    isLoading,
+    isFetching,
+    error
+  } = useQuery({
+    queryKey: buyerQueryKeys.orders(user?.id),
+    queryFn: () => loadBuyerOrdersData(user?.id)
+  });
+  const orders = data?.orders ?? [];
+  const buyer = data?.buyer ?? null;
+  const products = data?.products ?? [];
 
-  useEffect(() => {
-    let isMounted = true;
+  useRealtimeEvent<{ buyerId?: string }>('realtime:orders', (detail) => {
+    if (!user?.id || (detail?.buyerId && detail.buyerId !== user.id)) return;
+    queryClient.invalidateQueries({ queryKey: ['buyer-orders'] });
+  });
 
-    const toBuyerProfile = (me: any): Buyer => ({
-      id: me?.id || user?.id || '',
-      companyName: me?.companyName || 'Buyer Account',
-      contactPerson: me?.name || 'Buyer',
-      email: me?.email || '',
-      phone: me?.phone || '',
-      address: '',
-      creditLimit: 0,
-      availableCredit: 0,
-      outstandingBalance: 0,
-      paymentTerms: '',
-      totalSpend: 0,
-      totalOrders: 0,
-      status: 'Active',
-      tier: me?.tier || 'Bronze',
-      discountRate: 0,
-      joinDate: ''
-    });
+  useRealtimeEvent<{ buyerId?: string }>('realtime:payments', (detail) => {
+    if (!user?.id || (detail?.buyerId && detail.buyerId !== user.id)) return;
+    queryClient.invalidateQueries({ queryKey: ['buyer-orders'] });
+  });
 
-    const loadBuyerOrders = async () => {
-      if (!user?.id) {
-        setIsLoading(false);
-        return;
-      }
-
-      setIsLoading(true);
-      setError('');
-
-      try {
-        const [ordersRes, meRes, productsRes] = await Promise.all([
-          fetch('/api/orders', { credentials: 'include' }),
-          fetch('/api/auth/me', { credentials: 'include' }),
-          fetch('/api/products', { credentials: 'include' })
-        ]);
-
-        if (!ordersRes.ok) {
-          throw new Error('Failed to load orders');
-        }
-
-        const ordersData = await ordersRes.json();
-        const meData = meRes.ok ? await meRes.json() : null;
-        const productsData = productsRes.ok ? await productsRes.json() : [];
-
-        const ordersArray = Array.isArray(ordersData) ? ordersData : (ordersData?.data || []);
-        const productsArray = Array.isArray(productsData) ? productsData : (productsData?.data || []);
-
-        const buyerOrders = ordersArray.filter((o: Order) => {
-          if (o.buyerId !== user.id) return false;
-          // Buyers can see their own drafts, but not drafts created by others
-          if (normalizeStatus(o.status) === OrderStatus.DRAFT && o.createdBy !== 'buyer') return false;
-          return true;
-        });
-
-        if (!isMounted) return;
-
-        setOrders(buyerOrders);
-        setBuyer(meData ? toBuyerProfile(meData) : null);
-        setProducts(productsArray);
-      } catch (err) {
-        console.error('Failed to load buyer orders:', err);
-        if (isMounted) {
-          setError('Failed to load order history.');
-        }
-      } finally {
-        if (isMounted) setIsLoading(false);
-      }
-    };
-
-    loadBuyerOrders();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [user?.id]);
+  useRealtimeEvent<{ buyerId?: string }>('realtime:credits', (detail) => {
+    if (!user?.id || (detail?.buyerId && detail.buyerId !== user.id)) return;
+    queryClient.invalidateQueries({ queryKey: ['buyer-orders'] });
+  });
 
   useEffect(() => {
     let result = orders;
@@ -128,21 +77,11 @@ const BuyerOrders: React.FC = () => {
     setFilteredOrders(result);
   }, [activeStatus, orders, searchQuery]);
 
-  const normalizeStatus = (status: OrderStatus | string) => {
-    const value = status?.toString().trim().toUpperCase() || '';
-    if (value === 'DRAFT') return OrderStatus.DRAFT;
-    if (value === 'PENDING') return OrderStatus.PENDING;
-    if (value === 'PROCESSING') return OrderStatus.PROCESSING;
-    if (value === 'SHIPPED') return OrderStatus.SHIPPED;
-    if (value === 'DELIVERED') return OrderStatus.DELIVERED;
-    if (value === 'UNDELIVERED') return OrderStatus.UNDELIVERED;
-    if (value === 'CANCELLED' || value === 'CANCELED') return OrderStatus.CANCELLED;
-    if (value === 'DELETED') return OrderStatus.DELETED;
-    return value as OrderStatus;
-  };
+  const normalizeStatus = normalizeBuyerOrderStatus;
 
   const getStatusColor = (status: OrderStatus) => {
     switch(normalizeStatus(status)) {
+      case OrderStatus.ON_REVIEW: return 'bg-cyan-100 text-cyan-800';
       case OrderStatus.PENDING: return 'bg-amber-100 text-amber-800';
       case OrderStatus.PROCESSING: return 'bg-blue-100 text-blue-800';
       case OrderStatus.SHIPPED: return 'bg-purple-100 text-purple-800';
@@ -176,10 +115,16 @@ const BuyerOrders: React.FC = () => {
     return false;
   };
 
+  const getCardOrderId = (id: string) => {
+    const parts = String(id || '').split('-');
+    return parts.length > 1 ? parts[parts.length - 1] : id;
+  };
+
   // Filter tabs list
   const filterTabs = [
     'All', 
     OrderStatus.DRAFT, 
+    OrderStatus.ON_REVIEW,
     OrderStatus.PENDING, 
     OrderStatus.PROCESSING, 
     OrderStatus.SHIPPED, 
@@ -193,13 +138,29 @@ const BuyerOrders: React.FC = () => {
   }
 
   if (error) {
-    return <div className="p-8 text-red-600 font-semibold">{error}</div>;
+    return (
+      <div className="p-8">
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-center">
+          <p className="mb-2 font-semibold text-red-700">Failed to load order history.</p>
+          <p className="mb-4 text-sm text-red-600">{error instanceof Error ? error.message : 'An unexpected error occurred.'}</p>
+          <button
+            onClick={() => queryClient.invalidateQueries({ queryKey: buyerQueryKeys.orders(user?.id) })}
+            className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-red-700"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="p-4 lg:p-8 max-w-5xl mx-auto space-y-6 pb-32">
       <div className="flex flex-col gap-4">
-        <h1 className="text-2xl lg:text-3xl font-black text-slate-900 tracking-tight">{t('nav.history')}</h1>
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="text-2xl lg:text-3xl font-black text-slate-900 tracking-tight">{t('nav.history')}</h1>
+          <RefreshIndicator visible={isFetching && !isLoading} />
+        </div>
 
         <div className="relative">
           <span className="absolute left-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-gray-400">search</span>
@@ -247,14 +208,14 @@ const BuyerOrders: React.FC = () => {
                 ${(normalizeStatus(order.status) === OrderStatus.CANCELLED || normalizeStatus(order.status) === OrderStatus.DELETED) ? 'opacity-70 grayscale' : ''}
               `}
             >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 items-center gap-4">
                   <div className="size-12 bg-gray-50 rounded-2xl flex items-center justify-center text-slate-400 group-hover:text-[#00A3C4] group-hover:bg-[#E0F7FA] transition-all">
                     <span className="material-symbols-outlined text-2xl">receipt_long</span>
                   </div>
-                  <div>
-                    <h3 className="font-black text-slate-900 text-base lg:text-lg">#{order.id.replace('ORD-', '')}</h3>
-                    <div className="flex items-center gap-2 mt-0.5">
+                  <div className="min-w-0">
+                    <h3 className="truncate font-black text-slate-900 text-base lg:text-lg">#{getCardOrderId(order.id)}</h3>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-2">
                        <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-wide ${getStatusColor(order.status as OrderStatus)}`}>
                         {normalizeStatus(order.status)}
                       </span>
@@ -265,13 +226,13 @@ const BuyerOrders: React.FC = () => {
                   </div>
                 </div>
 
-                <div className="flex flex-col items-end gap-2">
-                   <p className="text-lg font-black text-slate-900">ETB {order.total.toLocaleString()}</p>
-                   <div className="flex items-center gap-2">
+                <div className="flex flex-col gap-2 sm:items-end">
+                   <p className="text-lg font-black text-slate-900 sm:text-right">ETB {order.total.toLocaleString()}</p>
+                   <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
                      {normalizeStatus(order.status) !== OrderStatus.DRAFT && normalizeStatus(order.status) !== OrderStatus.CANCELLED && normalizeStatus(order.status) !== OrderStatus.DELETED && (
                        <button 
                         onClick={(e) => handleInvoiceClick(e, order)}
-                        className="flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-[#00A3C4] hover:text-[#008CA8] bg-[#E0F7FA] hover:bg-[#B2EBF2] px-3 py-1.5 rounded-lg transition-colors"
+                        className="flex w-full items-center justify-center gap-1 text-[10px] font-black uppercase tracking-wider text-[#00A3C4] hover:text-[#008CA8] bg-[#E0F7FA] hover:bg-[#B2EBF2] px-3 py-2 rounded-lg transition-colors sm:w-auto sm:justify-start"
                        >
                          <span className="material-symbols-outlined text-sm">download</span>
                          {t('buyer.invoice')}
@@ -280,7 +241,7 @@ const BuyerOrders: React.FC = () => {
                      {canPay(order) && (
                        <button 
                         onClick={(e) => handlePayClick(e, order.id)}
-                        className="flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-white bg-[#00A3C4] hover:bg-[#008CA8] px-3 py-1.5 rounded-lg transition-colors shadow-sm"
+                        className="flex w-full items-center justify-center gap-1 text-[10px] font-black uppercase tracking-wider text-white bg-[#00A3C4] hover:bg-[#008CA8] px-3 py-2 rounded-lg transition-colors shadow-sm sm:w-auto sm:justify-start"
                        >
                          {t('buyer.pay')}
                        </button>

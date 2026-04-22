@@ -1,9 +1,13 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Notification } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import LoadingState from '../components/LoadingState';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
+import RefreshIndicator from '../components/RefreshIndicator';
+import { buyerQueryKeys, loadBuyerNotifications } from '../services/buyerQueries';
 
 type NotificationFilter = 'New' | 'All' | 'Order' | 'Payment' | 'Credit' | 'Inventory' | 'System';
 
@@ -21,37 +25,23 @@ const FILTER_PRIORITY: NotificationFilter[] = ['New', 'All', 'Order', 'Payment',
 const BuyerNotifications: React.FC = () => {
   const { t } = useLanguage();
   const location = useLocation();
-  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [activeFilter, setActiveFilter] = useState<NotificationFilter>('New');
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const {
+    data: notifications = [],
+    isLoading,
+    isFetching,
+    error
+  } = useQuery({
+    queryKey: buyerQueryKeys.notifications(),
+    queryFn: loadBuyerNotifications
+  });
   const query = new URLSearchParams(location.search).get('q')?.trim().toLowerCase() || '';
 
-  useEffect(() => {
-    let isMounted = true;
-
-    const loadNotifications = async () => {
-      setIsLoading(true);
-      setError('');
-      try {
-        const res = await fetch('/api/notifications', { credentials: 'include' });
-        if (!res.ok) throw new Error('Failed to fetch notifications');
-        const data = await res.json();
-        if (isMounted) setNotifications(data || []);
-      } catch (err) {
-        console.error('Load notifications error:', err);
-        if (isMounted) setError('Failed to load notifications.');
-      } finally {
-        if (isMounted) setIsLoading(false);
-      }
-    };
-
-    loadNotifications();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+  useRealtimeEvent('realtime:notifications', () => {
+    queryClient.invalidateQueries({ queryKey: ['buyer-notifications'] });
+  });
 
   const filteredNotifications = notifications.filter((notif) => {
     const matchesFilter =
@@ -82,7 +72,9 @@ const BuyerNotifications: React.FC = () => {
         credentials: 'include'
       });
       if (!res.ok) throw new Error('Failed to mark all read');
-      setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+      queryClient.setQueryData<Notification[]>(buyerQueryKeys.notifications(), (prev = []) =>
+        prev.map((notification) => ({ ...notification, isRead: true }))
+      );
     } catch (err) {
       console.error('Mark all read error:', err);
       alert('Failed to mark notifications as read.');
@@ -97,7 +89,7 @@ const BuyerNotifications: React.FC = () => {
         credentials: 'include'
       });
       if (!res.ok) throw new Error('Failed to mark notification read');
-      setNotifications(prev =>
+      queryClient.setQueryData<Notification[]>(buyerQueryKeys.notifications(), (prev = []) =>
         prev.map((item) => (item.id === notif.id ? { ...item, isRead: true } : item))
       );
     } catch (err) {
@@ -134,14 +126,17 @@ const BuyerNotifications: React.FC = () => {
     <div className="p-4 lg:p-8 max-w-3xl mx-auto min-h-screen">
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl lg:text-3xl font-black text-slate-900 tracking-tight">{t('buyer.notifications')}</h1>
-        {filteredNotifications.some(n => !n.isRead) && (
-          <button 
-            onClick={handleMarkAllRead}
-            className="text-xs font-black text-[#00A3C4] uppercase tracking-widest hover:underline"
-          >
-            Mark all read
-          </button>
-        )}
+        <div className="flex items-center gap-3">
+          <RefreshIndicator visible={isFetching && !isLoading} />
+          {filteredNotifications.some(n => !n.isRead) && (
+            <button 
+              onClick={handleMarkAllRead}
+              className="text-xs font-black text-[#00A3C4] uppercase tracking-widest hover:underline"
+            >
+              Mark all read
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="mb-4 flex gap-2 overflow-x-auto pb-2">
@@ -165,7 +160,16 @@ const BuyerNotifications: React.FC = () => {
         {isLoading ? (
           <LoadingState message="Loading notifications..." />
         ) : error ? (
-          <div className="p-12 text-center text-red-600 font-semibold">{error}</div>
+          <div className="p-12 text-center">
+            <p className="font-semibold text-red-600">Failed to load notifications.</p>
+            <p className="mt-2 text-sm text-red-500">{error instanceof Error ? error.message : 'An unexpected error occurred.'}</p>
+            <button
+              onClick={() => queryClient.invalidateQueries({ queryKey: buyerQueryKeys.notifications() })}
+              className="mt-4 rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-red-700"
+            >
+              Retry
+            </button>
+          </div>
         ) : filteredNotifications.length > 0 ? (
           <div className="divide-y divide-gray-50">
             {filteredNotifications.map((notif) => (

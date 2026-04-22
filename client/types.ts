@@ -2,6 +2,7 @@
 // types.ts
 export enum OrderStatus {
   DRAFT = 'DRAFT',
+  ON_REVIEW = 'ON_REVIEW',
   PENDING = 'PENDING', 
   PROCESSING = 'PROCESSING',
   SHIPPED = 'SHIPPED',
@@ -52,6 +53,11 @@ export interface Product {
   status: 'In Stock' | 'Low' | 'Empty' | 'Discontinued';
   supplierName?: string;
   supplierPhone?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  recommended?: boolean;
+  recommendationScore?: number;
+  recommendationReasons?: string[];
 }
 
 export interface ReturnLog {
@@ -105,8 +111,6 @@ export interface Buyer {
   phone: string;
   address: string;
   avatar?: string;
-  creditLimit: number;
-  availableCredit: number;
   outstandingBalance: number;
   paymentTerms: string;
   totalSpend: number;

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Buyer, CreditRequest, Order, Payment } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
 
 const CreditDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -18,6 +19,7 @@ const CreditDetails: React.FC = () => {
   const [rejectReason, setRejectReason] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -81,7 +83,17 @@ const CreditDetails: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [id]);
+  }, [id, refreshToken]);
+
+  useRealtimeEvent<{ creditRequestId?: string }>('realtime:credits', (detail) => {
+    if (!id || detail?.creditRequestId !== id) return;
+    setRefreshToken((value) => value + 1);
+  });
+
+  useRealtimeEvent<{ creditRequestId?: string }>('realtime:payments', (detail) => {
+    if (!request?.id || detail?.creditRequestId !== request.id) return;
+    setRefreshToken((value) => value + 1);
+  });
 
   const refreshRequest = async () => {
     if (!id) return;

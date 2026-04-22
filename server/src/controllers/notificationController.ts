@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import pool from '../config/db';
+import { emitNotificationChanged } from '../services/realtime';
 
 const getRecipientId = (req: Request) => {
   const user = (req as any).user;
@@ -35,6 +36,7 @@ export const markAllNotificationsRead = async (req: Request, res: Response) => {
        WHERE recipient_id = $1`,
       [recipientId]
     );
+    emitNotificationChanged(recipientId, { action: 'read-all' });
     res.json({ success: true });
   } catch (err) {
     console.error('Mark notifications read error:', err);
@@ -59,6 +61,11 @@ export const markNotificationRead = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Notification not found' });
     }
 
+    emitNotificationChanged(recipientId, {
+      action: 'updated',
+      notificationId: result.rows[0].id,
+      notification: result.rows[0]
+    });
     res.json(result.rows[0]);
   } catch (err) {
     console.error('Mark notification read error:', err);
@@ -68,7 +75,7 @@ export const markNotificationRead = async (req: Request, res: Response) => {
 
 // DELETE /api/notifications/:id
 export const deleteNotification = async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = String(req.params.id || '');
   try {
     const recipientId = getRecipientId(req);
     const result = await pool.query(
@@ -82,6 +89,10 @@ export const deleteNotification = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Notification not found' });
     }
 
+    emitNotificationChanged(recipientId, {
+      action: 'deleted',
+      notificationId: id
+    });
     res.json({ success: true });
   } catch (err) {
     console.error('Delete notification error:', err);

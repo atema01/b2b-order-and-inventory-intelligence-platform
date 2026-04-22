@@ -2,6 +2,8 @@
 import { Request, Response } from 'express';
 import pool from '../config/db';
 import { logActivity } from '../utils/activityLog';
+import { createNotificationRecord } from '../services/notificationService';
+import { emitInventoryChanged } from '../services/realtime';
 
 const parseNumber = (value: any): number => {
   if (typeof value === 'number') return value;
@@ -28,21 +30,6 @@ const computeStatus = (totalStock: number, reorderPoint: number) => {
 };
 
 // System logs disabled; user-initiated logs use logActivity
-
-const createNotification = async (
-  type: string,
-  title: string,
-  message: string,
-  severity: string,
-  recipientId: string,
-  relatedId?: string
-) => {
-  await pool.query(
-    `INSERT INTO notifications (type, title, message, time, is_read, severity, recipient_id, related_id)
-     VALUES ($1, $2, $3, $4, false, $5, $6, $7)`,
-    [type, title, message, new Date().toISOString(), severity, recipientId, relatedId || null]
-  );
-};
 
 const adjustProductStock = async (
   productId: string,
@@ -90,7 +77,7 @@ const adjustProductStock = async (
   );
 
   if (newStatus !== oldStatus && (newStatus === 'Low' || newStatus === 'Empty')) {
-    await createNotification(
+    await createNotificationRecord(
       'Stock',
       'Inventory Alert',
       `${newStatus} stock warning for product ${productId}.`,
@@ -100,6 +87,17 @@ const adjustProductStock = async (
     );
     // System logs disabled; only user-initiated logs are recorded
   }
+
+  emitInventoryChanged({
+    productId,
+    status: newStatus,
+    stock: {
+      mainWarehouse: nextMain,
+      backRoom: nextBack,
+      showRoom: nextShow,
+      total: totalStock
+    }
+  });
 };
 
 export const getAllReturns = async (req: Request, res: Response) => {

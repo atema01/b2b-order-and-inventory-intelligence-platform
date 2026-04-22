@@ -16,7 +16,6 @@ const AddBuyer: React.FC = () => {
     email: '',
     phone: '',
     address: '',
-    creditLimit: 500000,
     paymentTerms: 'Net 30',
     tier: '',
     password: ''
@@ -72,7 +71,6 @@ const AddBuyer: React.FC = () => {
           role_id: 'R-BUYER',
           companyName: form.companyName,
           address: form.address,
-          creditLimit: form.creditLimit,
           paymentTerms: form.paymentTerms,
           tier: form.tier
         })
@@ -102,7 +100,7 @@ const AddBuyer: React.FC = () => {
             <span className="material-symbols-outlined text-4xl">person_add</span>
           </div>
           <h1 className="text-3xl font-black text-slate-900 tracking-tight">Register Wholesale Partner</h1>
-          <p className="text-slate-500 font-medium">Create a new distribution account and set financial credit limits.</p>
+          <p className="text-slate-500 font-medium">Create a new distribution account and set the account payment policy.</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
@@ -179,21 +177,10 @@ const AddBuyer: React.FC = () => {
           <div className="bg-white rounded-[32px] p-8 lg:p-10 border border-gray-100 shadow-sm space-y-8">
             <div className="flex items-center gap-3 border-b border-gray-50 pb-5">
               <span className="material-symbols-outlined text-primary font-bold">account_balance_wallet</span>
-              <h3 className="text-xs font-black uppercase text-slate-800 tracking-widest">Account & Credit</h3>
+              <h3 className="text-xs font-black uppercase text-slate-800 tracking-widest">Account Terms</h3>
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-8">
-              <div className="space-y-2">
-                <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Credit Limit (ETB)</label>
-                <input 
-                  type="number"
-                  step="10000"
-                  required
-                  className="w-full bg-gray-50 border-transparent rounded-2xl px-6 py-4 font-black text-slate-800 focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all shadow-inner"
-                  value={form.creditLimit}
-                  onChange={(e) => setForm({ ...form, creditLimit: parseInt(e.target.value) || 0 })}
-                />
-              </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-black uppercase text-slate-400 tracking-widest ml-1">Payment Policy</label>
                 <div className="relative">

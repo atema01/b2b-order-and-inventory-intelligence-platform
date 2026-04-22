@@ -1,12 +1,17 @@
 import React, { useState, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { Order, OrderStatus, Buyer } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
+import RefreshIndicator from '../components/RefreshIndicator';
 
 const normalizeStatus = (value: any): OrderStatus => {
   if (typeof value !== 'string') return OrderStatus.PENDING;
   const map: Record<string, OrderStatus> = {
     DRAFT: OrderStatus.DRAFT,
+    ON_REVIEW: OrderStatus.ON_REVIEW,
+    'ON REVIEW': OrderStatus.ON_REVIEW,
     PENDING: OrderStatus.PENDING,
     PROCESSING: OrderStatus.PROCESSING,
     SHIPPED: OrderStatus.SHIPPED,
@@ -16,6 +21,7 @@ const normalizeStatus = (value: any): OrderStatus => {
     CANCELED: OrderStatus.CANCELLED,
     DELETED: OrderStatus.DELETED,
     Draft: OrderStatus.DRAFT,
+    'On Review': OrderStatus.ON_REVIEW,
     Pending: OrderStatus.PENDING,
     Processing: OrderStatus.PROCESSING,
     Shipped: OrderStatus.SHIPPED,
@@ -30,14 +36,12 @@ const normalizeStatus = (value: any): OrderStatus => {
 
 const Orders: React.FC = () => {
   const { t } = useLanguage();
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [buyers, setBuyers] = useState<Buyer[]>([]);
   const [activeTab, setActiveTab] = useState<string>('All Orders');
   const [searchQuery, setSearchQuery] = useState('');
-  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [limit] = useState(9);
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const normalizeOrders = (ordersData: any[]) =>
     ordersData.map((o: any) => ({
@@ -53,46 +57,55 @@ const Orders: React.FC = () => {
       order?.companyName ||
       order?.buyer?.companyName ||
       order?.buyer?.name ||
-      buyers.find(b => b.id === order?.buyerId)?.companyName ||
+      ordersData.buyers.find(b => b.id === order?.buyerId)?.companyName ||
       'Unknown Buyer'
     );
   };
 
-  // Fetch orders and buyers from real API
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        // Orders page requires Orders data; buyers lookup is optional for names/search.
-        const ordersRes = await fetch('/api/orders', { credentials: 'include' });
-        if (ordersRes.ok) {
-          const ordersData = await ordersRes.json();
-          if (ordersData?.data) {
-            setOrders(normalizeOrders(ordersData.data));
-          } else {
-            setOrders(normalizeOrders(ordersData));
-          }
-        } else {
-          setOrders([]);
-        }
+  const {
+    data: ordersData = { orders: [], buyers: [] },
+    isLoading,
+    isFetching,
+    error
+  } = useQuery({
+    queryKey: ['orders'],
+    queryFn: async (): Promise<{ orders: Order[]; buyers: Buyer[] }> => {
+      let nextOrders: Order[] = [];
+      let nextBuyers: Buyer[] = [];
 
-        // If user lacks Buyers permission this may return 403; keep page functional.
-        const buyersRes = await fetch('/api/buyers', { credentials: 'include' });
-        if (buyersRes.ok) {
-          const buyersData = await buyersRes.json();
-          setBuyers(Array.isArray(buyersData) ? buyersData : []);
-        } else {
-          setBuyers([]);
-        }
-      } catch (err) {
-        console.error('Failed to fetch orders/buyers:', err);
-      } finally {
-        setLoading(false);
+      const ordersRes = await fetch('/api/orders', { credentials: 'include' });
+      if (!ordersRes.ok) {
+        throw new Error('Failed to fetch orders');
       }
-    };
+      const fetchedOrders = await ordersRes.json();
+      nextOrders = fetchedOrders?.data
+        ? normalizeOrders(fetchedOrders.data)
+        : normalizeOrders(fetchedOrders);
 
-    fetchData();
-  }, []);
+      const buyersRes = await fetch('/api/buyers', { credentials: 'include' });
+      if (buyersRes.ok) {
+        const buyersData = await buyersRes.json();
+        nextBuyers = Array.isArray(buyersData) ? buyersData : [];
+      }
+
+      return {
+        orders: nextOrders,
+        buyers: nextBuyers
+      };
+    }
+  });
+
+  useRealtimeEvent('realtime:orders', () => {
+    queryClient.invalidateQueries({ queryKey: ['orders'] });
+  });
+
+  useRealtimeEvent('realtime:payments', () => {
+    queryClient.invalidateQueries({ queryKey: ['orders'] });
+  });
+
+  useRealtimeEvent('realtime:credits', () => {
+    queryClient.invalidateQueries({ queryKey: ['orders'] });
+  });
   useEffect(() => {
     setPage(1);
   }, [activeTab, searchQuery]);
@@ -100,6 +113,7 @@ const Orders: React.FC = () => {
   const tabs = [
     { id: 'All Orders', label: t('status.all') },
     { id: 'Draft', label: t('status.draft') },
+    { id: 'On Review', label: t('status.on_review') },
     { id: 'Pending', label: t('status.pending') },
     { id: 'Processing', label: t('status.processing') },
     { id: 'Shipped', label: t('status.shipped') },
@@ -109,7 +123,7 @@ const Orders: React.FC = () => {
     { id: 'Deleted', label: t('status.deleted') }
   ];
 
-  const filteredOrders = orders.filter(order => {
+  const filteredOrders = ordersData.orders.filter(order => {
   const orderStatus = normalizeStatus(order.status);
 
   if (activeTab === 'All Orders') {
@@ -138,6 +152,8 @@ const Orders: React.FC = () => {
     switch (status) {
       case OrderStatus.PENDING:
         return 'bg-amber-50 text-amber-700 border-amber-100';
+      case OrderStatus.ON_REVIEW:
+        return 'bg-cyan-50 text-cyan-700 border-cyan-100';
       case OrderStatus.DRAFT:
         return 'bg-gray-50 text-gray-500 border-gray-100';
       case OrderStatus.PROCESSING:
@@ -170,16 +186,7 @@ const Orders: React.FC = () => {
       });
 
       if (response.ok) {
-        // Refresh orders list
-        const ordersRes = await fetch('/api/orders', { credentials: 'include' });
-        if (ordersRes.ok) {
-          const ordersData = await ordersRes.json();
-          if (ordersData?.data) {
-            setOrders(normalizeOrders(ordersData.data));
-          } else {
-            setOrders(normalizeOrders(ordersData));
-          }
-        }
+        queryClient.invalidateQueries({ queryKey: ['orders'] });
       } else {
         const errorData = await response.json();
         alert(errorData.error || 'Failed to update order status');
@@ -196,11 +203,47 @@ const Orders: React.FC = () => {
     navigate(path);
   };
 
+  const getCardOrderId = (id: string) => {
+    const parts = String(id || '').split('-');
+    return parts.length > 1 ? parts[parts.length - 1] : id;
+  };
+
+  const handleVerifyClick = async (e: React.MouseEvent, orderId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      const response = await fetch(`/api/payments?orderId=${encodeURIComponent(orderId)}`, { credentials: 'include' });
+      if (!response.ok) {
+        navigate('/payments');
+        return;
+      }
+
+      const data = await response.json();
+      const payments = Array.isArray(data) ? data : [];
+      const pending = payments.find((payment: any) => payment.status === 'Pending Review');
+      const target = pending || payments[0];
+
+      if (target?.id) {
+        navigate(`/payments/${target.id}`);
+        return;
+      }
+
+      navigate('/payments');
+    } catch (err) {
+      console.error('Failed to open payment verification:', err);
+      navigate('/payments');
+    }
+  };
+
   return (
     <div className="min-h-full bg-gray-50 pb-32">
       <div className="sticky top-16 z-30 bg-white border-b border-gray-200 w-full">
         <div className="max-w-7xl mx-auto px-4 pb-4">
-          <div className="flex flex-col lg:flex-row gap-3 pt-4">
+          <div className="flex flex-col gap-3 pt-4">
+            <div className="flex items-center justify-end">
+              <RefreshIndicator visible={isFetching && !isLoading} />
+            </div>
+            <div className="flex flex-col lg:flex-row gap-3">
             <div className="flex-1 relative group">
               <span className="absolute left-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-gray-400 text-xl font-light">search</span>
               <input 
@@ -218,6 +261,7 @@ const Orders: React.FC = () => {
               <span className="material-symbols-outlined text-lg">add_circle</span>
               {t('order.new')}
             </Link>
+            </div>
           </div>
           
           <div className="flex gap-2 overflow-x-auto pb-1 mt-4 scrollbar-hide -mx-4 px-4 lg:mx-0 lg:px-0">
@@ -240,16 +284,28 @@ const Orders: React.FC = () => {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 pt-10 lg:pt-12 pb-12 lg:px-8">
-        {loading ? (
+        {isLoading ? (
           <div className="py-24 text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mx-auto mb-4"></div>
             <p className="text-slate-600">Loading orders...</p>
+          </div>
+        ) : error ? (
+          <div className="py-16 text-center bg-white rounded-[40px] border border-red-100">
+            <p className="text-red-700 font-bold">Failed to load orders.</p>
+            <p className="mt-2 text-sm text-red-600">{error instanceof Error ? error.message : 'Please try again.'}</p>
+            <button
+              onClick={() => queryClient.invalidateQueries({ queryKey: ['orders'] })}
+              className="mt-4 rounded-2xl bg-red-600 px-5 py-3 text-xs font-black uppercase tracking-widest text-white transition-all hover:bg-red-700"
+            >
+              Retry
+            </button>
           </div>
         ) : pagedOrders.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
             {pagedOrders.map(order => {
               const buyerLabel = getBuyerLabel(order);
               const isDraft = order.status === OrderStatus.DRAFT;
+              const isOnReview = order.status === OrderStatus.ON_REVIEW;
               const isPending = order.status === OrderStatus.PENDING;
               const isProcessing = order.status === OrderStatus.PROCESSING;
               const isShipped = order.status === OrderStatus.SHIPPED;
@@ -263,7 +319,7 @@ const Orders: React.FC = () => {
                 >
                   <div className="flex justify-between items-center mb-6">
                     <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest truncate">
-                      {order.id}
+                      #{getCardOrderId(order.id)}
                     </span>
                     <span className={`px-3 py-1.5 rounded-xl text-[9px] font-black uppercase tracking-wider border ${getStatusStyles(order.status)}`}>
                       {t(`status.${order.status.toLowerCase()}` as any)}
@@ -297,6 +353,15 @@ const Orders: React.FC = () => {
                       </button>
                     )}
                     
+                    {!isDeleted && isOnReview && (
+                      <button
+                        onClick={(e) => handleVerifyClick(e, order.id)}
+                        className="bg-cyan-600 text-white px-6 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-cyan-600/20 hover:bg-cyan-700 transition-all active:scale-95"
+                      >
+                        {t('order.verify')}
+                      </button>
+                    )}
+
                     {!isDeleted && (isPending || isProcessing) && (
                       <button 
                         onClick={(e) => handleActionClick(e, `/orders/${order.id}/process`)}
@@ -319,7 +384,7 @@ const Orders: React.FC = () => {
         )}
 
         {/* Pagination */}
-        {!loading && totalFiltered > limit && (
+        {!isLoading && totalFiltered > limit && (
           <div className="flex items-center justify-center gap-4 pt-10">
             <button
               onClick={() => setPage(p => Math.max(1, p - 1))}

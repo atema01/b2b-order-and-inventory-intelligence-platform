@@ -1,20 +1,18 @@
 // Dashboard.tsx
-import React, { useState, useEffect } from 'react';
+import React from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { Order, Product, OrderStatus, Buyer, Staff, StorageLocationId } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { DEFAULT_STORAGE_LOCATIONS, fetchStorageLocations } from '../utils/storageLocations';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
+import RefreshIndicator from '../components/RefreshIndicator';
 
 const Dashboard: React.FC = () => {
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [buyers, setBuyers] = useState<Buyer[]>([]);
-  const [storageLocations, setStorageLocations] = useState(DEFAULT_STORAGE_LOCATIONS);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const { t } = useLanguage();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
 
   // Extract permissions and current user from auth context
   const permissions = user?.permissions || {};
@@ -28,6 +26,8 @@ const Dashboard: React.FC = () => {
     if (typeof value !== 'string') return OrderStatus.PENDING;
     const map: Record<string, OrderStatus> = {
       DRAFT: OrderStatus.DRAFT,
+      ON_REVIEW: OrderStatus.ON_REVIEW,
+      'ON REVIEW': OrderStatus.ON_REVIEW,
       PENDING: OrderStatus.PENDING,
       PROCESSING: OrderStatus.PROCESSING,
       SHIPPED: OrderStatus.SHIPPED,
@@ -37,6 +37,7 @@ const Dashboard: React.FC = () => {
       CANCELED: OrderStatus.CANCELLED,
       DELETED: OrderStatus.DELETED,
       Draft: OrderStatus.DRAFT,
+      'On Review': OrderStatus.ON_REVIEW,
       Pending: OrderStatus.PENDING,
       Processing: OrderStatus.PROCESSING,
       Shipped: OrderStatus.SHIPPED,
@@ -49,6 +50,25 @@ const Dashboard: React.FC = () => {
     return map[value] || OrderStatus.PENDING;
   };
 
+  const now = new Date();
+  const startOfCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+  const isBetween = (value: string, start: Date, end: Date) => {
+    const date = new Date(value);
+    return !Number.isNaN(date.getTime()) && date >= start && date < end;
+  };
+
+  const formatTrend = (current: number, previous: number) => {
+    if (previous === 0) {
+      if (current === 0) return { text: '0.0%', up: true };
+      return { text: '+100.0%', up: true };
+    }
+    const change = ((current - previous) / previous) * 100;
+    const sign = change > 0 ? '+' : '';
+    return { text: `${sign}${change.toFixed(1)}%`, up: change >= 0 };
+  };
+
   // Resolve buyer label from embedded order fields first, then buyers lookup.
   const getBuyerLabel = (order: any): string => {
     return (
@@ -57,76 +77,76 @@ const Dashboard: React.FC = () => {
       order?.companyName ||
       order?.buyer?.companyName ||
       order?.buyer?.name ||
-      buyers.find(b => b.id === order?.buyerId)?.companyName ||
+      dashboardData.buyers.find(b => b.id === order?.buyerId)?.companyName ||
       'Unknown Buyer'
     );
   };
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        setError(null);
+  const {
+    data: dashboardData = { orders: [], products: [], buyers: [] },
+    isLoading,
+    isFetching,
+    error
+  } = useQuery({
+    queryKey: ['dashboard', user?.id || 'guest', canViewReports, canViewProducts, canViewOrders, canViewBuyers],
+    queryFn: async (): Promise<{ orders: Order[]; products: Product[]; buyers: Buyer[] }> => {
+      const needsOrders = canViewOrders || canViewReports;
+      const needsProducts = canViewProducts || canViewReports;
+      const needsBuyers = canViewOrders && canViewBuyers;
+      let nextOrders: Order[] = [];
+      let nextProducts: Product[] = [];
+      let nextBuyers: Buyer[] = [];
 
-        // Load only datasets required by the sections this user can see.
-        const needsOrders = canViewOrders || canViewReports;
-        const needsProducts = canViewProducts || canViewReports;
-        const needsBuyers = canViewOrders && canViewBuyers;
-
-        if (needsOrders) {
-          const ordersRes = await fetch('/api/orders', { credentials: 'include' });
-          if (!ordersRes.ok) throw new Error('Failed to fetch orders');
-          const ordersData = await ordersRes.json();
-          setOrders(ordersData.map((o: any) => ({ ...o, status: normalizeStatus(o.status) })));
-        } else {
-          setOrders([]);
-        }
-
-        if (needsProducts) {
-          const productsRes = await fetch('/api/products', { credentials: 'include' });
-          if (!productsRes.ok) throw new Error('Failed to fetch products');
-          const productsData = await productsRes.json();
-          setProducts(productsData);
-        } else {
-          setProducts([]);
-        }
-
-        if (needsBuyers) {
-          const buyersRes = await fetch('/api/buyers', { credentials: 'include' });
-          if (buyersRes.ok) {
-            const buyersData = await buyersRes.json();
-            setBuyers(Array.isArray(buyersData) ? buyersData : []);
-          } else {
-            // Buyers list is optional for dashboard order cards.
-            setBuyers([]);
-          }
-        } else {
-          setBuyers([]);
-        }
-      } catch (err) {
-        console.error('Dashboard data fetch error:', err);
-        setError(err instanceof Error ? err.message : 'An unexpected error occurred');
-      } finally {
-        setLoading(false);
+      if (needsOrders) {
+        const ordersRes = await fetch('/api/orders', { credentials: 'include' });
+        if (!ordersRes.ok) throw new Error('Failed to fetch orders');
+        const fetchedOrders = await ordersRes.json();
+        const normalizedOrders = fetchedOrders?.data ? fetchedOrders.data : fetchedOrders;
+        nextOrders = normalizedOrders.map((o: any) => ({ ...o, status: normalizeStatus(o.status) }));
       }
-    };
 
-    fetchData();
-  }, [canViewOrders, canViewProducts, canViewReports, canViewBuyers]);
+      if (needsProducts) {
+        const productsRes = await fetch('/api/products', { credentials: 'include' });
+        if (!productsRes.ok) throw new Error('Failed to fetch products');
+        const productsData = await productsRes.json();
+        nextProducts = Array.isArray(productsData) ? productsData : [];
+      }
 
-  useEffect(() => {
-    if (!canViewProducts) return;
-    let active = true;
-    fetchStorageLocations()
-      .then((locations) => {
-        if (active) setStorageLocations(locations);
-      })
-      .catch(() => {});
-    return () => { active = false; };
-  }, [canViewProducts]);
+      if (needsBuyers) {
+        const buyersRes = await fetch('/api/buyers', { credentials: 'include' });
+        if (buyersRes.ok) {
+          const buyersData = await buyersRes.json();
+          nextBuyers = Array.isArray(buyersData) ? buyersData : [];
+        }
+      }
+
+      return {
+        orders: nextOrders,
+        products: nextProducts,
+        buyers: nextBuyers
+      };
+    }
+  });
+
+  const {
+    data: storageLocationsData,
+    isLoading: isStorageLocationsLoading
+  } = useQuery({
+    queryKey: ['storage-locations'],
+    queryFn: fetchStorageLocations
+  });
+  const storageLocations = storageLocationsData ?? DEFAULT_STORAGE_LOCATIONS;
+
+  useRealtimeEvent('realtime:orders', () => {
+    queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+  });
+
+  useRealtimeEvent('realtime:inventory', () => {
+    queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+  });
 
   // Loading state
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="p-4 lg:p-8 flex items-center justify-center min-h-screen">
         <div className="text-center">
@@ -143,9 +163,9 @@ const Dashboard: React.FC = () => {
       <div className="p-4 lg:p-8">
         <div className="bg-red-50 border border-red-200 rounded-xl p-6 text-center">
           <p className="text-red-700 font-medium mb-2">Failed to load dashboard</p>
-          <p className="text-red-600 text-sm mb-4">{error}</p>
+          <p className="text-red-600 text-sm mb-4">{error instanceof Error ? error.message : 'An unexpected error occurred'}</p>
           <button 
-            onClick={() => window.location.reload()}
+            onClick={() => queryClient.invalidateQueries({ queryKey: ['dashboard'] })}
             className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
           >
             Retry
@@ -156,43 +176,74 @@ const Dashboard: React.FC = () => {
   }
 
   // Calculate metrics (same as before)
-  const totalInventoryValue = products.reduce((acc, p) => {
+  const totalInventoryValue = dashboardData.products.reduce((acc, p) => {
     const totalQty = storageLocations.reduce((sum, loc) => sum + (p.stock[loc.id as StorageLocationId] || 0), 0);
     return acc + (totalQty * p.price);
   }, 0);
 
-  const totalSKUs = products.length;
+  const totalSKUs = dashboardData.products.length;
 
-  const itemsOnOrder = orders
+  const itemsOnOrder = dashboardData.orders
     .filter(o => o.status === OrderStatus.PENDING || o.status === OrderStatus.PROCESSING)
     .reduce((acc, o) => acc + o.items.reduce((sum, item) => sum + item.quantity, 0), 0);
 
-  const deliveredUnits = orders
+  const deliveredUnits = dashboardData.orders
     .filter(o => o.status === OrderStatus.DELIVERED)
     .reduce((acc, o) => acc + o.items.reduce((sum, item) => sum + item.quantity, 0), 0);
   
-  const onHandUnits = products.reduce((acc, p) => 
+  const onHandUnits = dashboardData.products.reduce((acc, p) => 
     acc + storageLocations.reduce((sum, loc) => sum + (p.stock[loc.id as StorageLocationId] || 0), 0), 0);
 
   const sellThroughRateVal = (deliveredUnits + onHandUnits) > 0 
     ? ((deliveredUnits / (deliveredUnits + onHandUnits)) * 100).toFixed(1) 
     : "0";
 
+  const previousMonthOrders = dashboardData.orders.filter((order) =>
+    isBetween(order.date, startOfLastMonth, startOfCurrentMonth)
+  );
+  const previousMonthOnOrder = previousMonthOrders
+    .filter(o => o.status === OrderStatus.PENDING || o.status === OrderStatus.PROCESSING)
+    .reduce((acc, o) => acc + o.items.reduce((sum, item) => sum + item.quantity, 0), 0);
+  const previousMonthDeliveredUnits = previousMonthOrders
+    .filter(o => o.status === OrderStatus.DELIVERED)
+    .reduce((acc, o) => acc + o.items.reduce((sum, item) => sum + item.quantity, 0), 0);
+  const previousMonthSellThrough = (previousMonthDeliveredUnits + onHandUnits) > 0
+    ? (previousMonthDeliveredUnits / (previousMonthDeliveredUnits + onHandUnits)) * 100
+    : 0;
+  const previousCatalogProducts = dashboardData.products.filter((product) => {
+    if (!product.createdAt) return true;
+    const created = new Date(product.createdAt);
+    return !Number.isNaN(created.getTime()) && created < startOfCurrentMonth;
+  });
+  const previousInventoryValue = previousCatalogProducts.reduce((acc, product) => {
+    const totalQty = storageLocations.reduce((sum, loc) => sum + (product.stock[loc.id as StorageLocationId] || 0), 0);
+    return acc + (totalQty * product.price);
+  }, 0);
+  const previousTotalSKUs = previousCatalogProducts.length;
+
+  const inventoryTrend = formatTrend(totalInventoryValue, previousInventoryValue);
+  const skuTrend = formatTrend(totalSKUs, previousTotalSKUs);
+  const onOrderTrend = formatTrend(itemsOnOrder, previousMonthOnOrder);
+  const sellThroughTrend = formatTrend(Number(sellThroughRateVal), previousMonthSellThrough);
+
   const stats = [
-    { label: t('dash.invValue'), value: `ETB ${(totalInventoryValue / 1000000).toFixed(1)}M`, trend: '+2.1%', up: true },
-    { label: t('dash.totalSkus'), value: totalSKUs.toLocaleString(), trend: '+0.7%', up: true },
-    { label: t('dash.onOrder'), value: itemsOnOrder.toLocaleString(), trend: '-1.2%', up: false },
-    { label: t('dash.sellThrough'), value: `${sellThroughRateVal}%`, trend: '+1.8%', up: true },
+    { label: t('dash.invValue'), value: `ETB ${(totalInventoryValue / 1000000).toFixed(1)}M`, trend: inventoryTrend.text, up: inventoryTrend.up },
+    { label: t('dash.totalSkus'), value: totalSKUs.toLocaleString(), trend: skuTrend.text, up: skuTrend.up },
+    { label: t('dash.onOrder'), value: itemsOnOrder.toLocaleString(), trend: onOrderTrend.text, up: onOrderTrend.up },
+    { label: t('dash.sellThrough'), value: `${sellThroughRateVal}%`, trend: sellThroughTrend.text, up: sellThroughTrend.up },
   ];
 
-  const lowStockCount = products.filter(p => p.status === 'Low' || p.status === 'Empty').length;
+  const lowStockCount = dashboardData.products.filter(p => p.status === 'Low' || p.status === 'Empty').length;
 
   const locations = storageLocations.map((loc) => {
-    const items = products.reduce((acc, p) => acc + (p.stock[loc.id as StorageLocationId] || 0), 0);
-    const value = products.reduce((acc, p) => acc + ((p.stock[loc.id as StorageLocationId] || 0) * p.price), 0);
+    const items = dashboardData.products.reduce((acc, p) => acc + (p.stock[loc.id as StorageLocationId] || 0), 0);
+    const value = dashboardData.products.reduce((acc, p) => acc + ((p.stock[loc.id as StorageLocationId] || 0) * p.price), 0);
     const capUnits = loc.capacityUnits;
-    const capPercent = capUnits > 0 ? Math.min(100, Math.round((items / capUnits) * 100)) : 0;
-    const capTone = capUnits === 0
+    const isCapacityPending = isStorageLocationsLoading;
+    const capPercent = !isCapacityPending && capUnits > 0 ? Math.min(100, Math.round((items / capUnits) * 100)) : 0;
+    const capTone = isCapacityPending
+      ? 'bg-gray-200'
+      : capUnits === 0
       ? 'bg-gray-300'
       : capPercent >= 85
         ? 'bg-red-500'
@@ -205,6 +256,7 @@ const Dashboard: React.FC = () => {
       items,
       value,
       capUnits,
+      isCapacityPending,
       capPercent,
       capTone
     };
@@ -216,7 +268,7 @@ const Dashboard: React.FC = () => {
     return val.toString();
   };
 
-  const recentOrders = orders
+  const recentOrders = dashboardData.orders
     .filter(o => o.status === OrderStatus.PENDING || o.status === OrderStatus.PROCESSING)
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
     .slice(0, 5);
@@ -234,6 +286,7 @@ const Dashboard: React.FC = () => {
             {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
           </p>
         </div>
+        <RefreshIndicator visible={isFetching && !isLoading} />
       </div>
 
       {/* Stats Grid - Controlled by 'Reports' Permission */}
@@ -299,7 +352,7 @@ const Dashboard: React.FC = () => {
                       <div>
                         <h3 className="font-bold text-slate-800 group-hover:text-primary transition-colors">{loc.name}</h3>
                         <p className="text-[11px] text-gray-500 font-medium">
-                          {loc.items.toLocaleString()} {t('prod.units')} • ETB {formatCurrency(loc.value)} • {loc.capUnits > 0 ? `${loc.capUnits.toLocaleString()} cap` : 'Capacity not set'}
+                          {loc.items.toLocaleString()} {t('prod.units')} ? ETB {formatCurrency(loc.value)} ? {loc.isCapacityPending ? 'Loading capacity...' : loc.capUnits > 0 ? `${loc.capUnits.toLocaleString()} cap` : 'Capacity not set'}
                         </p>
                       </div>
                       <span className="material-symbols-outlined text-gray-300 group-hover:text-primary transition-colors">chevron_right</span>
@@ -307,7 +360,7 @@ const Dashboard: React.FC = () => {
                     <div className="space-y-1.5">
                       <div className="flex justify-between text-[9px] font-black text-gray-400 uppercase tracking-widest">
                         <span>{t('dash.stockCapacity')}</span>
-                        <span>{loc.capUnits > 0 ? `${loc.capPercent}%` : 'Not set'}</span>
+                        <span>{loc.isCapacityPending ? 'Loading...' : loc.capUnits > 0 ? `${loc.capPercent}%` : 'Not set'}</span>
                       </div>
                       <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
                         <div className={`h-full ${loc.capTone} transition-all duration-1000`} style={{ width: `${loc.capPercent}%` }}></div>
@@ -407,3 +460,4 @@ const Dashboard: React.FC = () => {
 };
 
 export default Dashboard;
+

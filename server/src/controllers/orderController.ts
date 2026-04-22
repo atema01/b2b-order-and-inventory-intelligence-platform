@@ -2,6 +2,9 @@
 import { Request, Response } from 'express';
 import pool from '../config/db';
 import { logActivity } from '../utils/activityLog';
+import { runFbProphetForecast, ProphetFrequency } from '../services/fbProphetService';
+import { createNotificationRecord } from '../services/notificationService';
+import { emitCreditChanged, emitInventoryChanged, emitOrderChanged, emitPaymentChanged } from '../services/realtime';
 
 // Helper function to safely parse numbers
 const parseNumber = (value: any): number => {
@@ -49,7 +52,7 @@ const updateProductStatus = async (productId: string) => {
       );
 
       if (newStatus === 'Low' || newStatus === 'Empty') {
-        await createNotification(
+        await createNotificationRecord(
           'Stock',
           'Inventory Alert',
           `${newStatus} stock warning for product ${productId}.`,
@@ -60,6 +63,8 @@ const updateProductStatus = async (productId: string) => {
         // System logs disabled; only user-initiated logs are recorded
       }
     }
+
+    await emitProductInventorySnapshot(productId);
   }
 };
 
@@ -79,8 +84,12 @@ const getParam = (value: string | string[] | undefined): string => {
   return value ?? '';
 };
 
+const generateEntityId = (prefix: string): string =>
+  `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+
 const VALID_STATUSES = [
   'Draft',
+  'On Review',
   'Pending',
   'Processing',
   'Shipped',
@@ -92,6 +101,8 @@ const VALID_STATUSES = [
 
 const STATUS_MAP: Record<string, string> = {
   DRAFT: 'Draft',
+  ON_REVIEW: 'On Review',
+  'ON REVIEW': 'On Review',
   PENDING: 'Pending',
   PROCESSING: 'Processing',
   SHIPPED: 'Shipped',
@@ -152,22 +163,326 @@ const getTaxRate = async (): Promise<number> => {
   return 0;
 };
 
-// System logs disabled; user-initiated logs use logActivity
-
-async function createNotification(
-  type: string,
-  title: string,
-  message: string,
-  severity: string,
-  recipientId: string,
-  relatedId?: string
-) {
-  await pool.query(
-    `INSERT INTO notifications (type, title, message, time, is_read, severity, recipient_id, related_id)
-     VALUES ($1, $2, $3, $4, false, $5, $6, $7)`,
-    [type, title, message, new Date().toISOString(), severity, recipientId, relatedId || null]
+const emitProductInventorySnapshot = async (productId: string) => {
+  const result = await pool.query(
+    `SELECT id, status, stock_main_warehouse, stock_back_room, stock_show_room
+     FROM products
+     WHERE id = $1`,
+    [productId]
   );
-}
+
+  if (result.rows.length === 0) return;
+
+  const row = result.rows[0];
+  const mainWarehouse = parseInteger(row.stock_main_warehouse);
+  const backRoom = parseInteger(row.stock_back_room);
+  const showRoom = parseInteger(row.stock_show_room);
+
+  emitInventoryChanged({
+    productId: row.id,
+    status: row.status,
+    stock: {
+      mainWarehouse,
+      backRoom,
+      showRoom,
+      total: mainWarehouse + backRoom + showRoom
+    }
+  });
+};
+
+const FORECAST_ELIGIBLE_STATUSES = new Set([
+  'Pending',
+  'Processing',
+  'Shipped',
+  'Delivered',
+  'Undelivered'
+]);
+
+type ForecastModel = 'holt-winters' | 'fb-prophet';
+
+const getStartOfDay = (date: Date) => {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+const getStartOfWeek = (date: Date) => {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+  d.setDate(diff);
+  return d;
+};
+
+const getStartOfMonth = (date: Date) => {
+  const d = new Date(date.getFullYear(), date.getMonth(), 1);
+  d.setHours(0, 0, 0, 0);
+  return d;
+};
+
+const holtWintersForecast = (
+  data: number[],
+  seasonLength: number,
+  alpha: number = 0.3,
+  beta: number = 0.1,
+  gamma: number = 0.1,
+  forecastLength: number
+) => {
+  if (data.length < seasonLength * 2) return [];
+
+  const clean = data.map((v) => (Number.isFinite(v) ? Math.max(0, v) : 0));
+  const zeroRatio = clean.filter((v) => v === 0).length / clean.length;
+
+  if (zeroRatio > 0.6) {
+    const window = Math.min(6, clean.length);
+    const recent = clean.slice(-window);
+    const prev = clean.slice(-(window * 2), -window);
+    const recentAvg = recent.reduce((a, b) => a + b, 0) / Math.max(1, recent.length);
+    const prevAvg = prev.length > 0 ? prev.reduce((a, b) => a + b, 0) / prev.length : recentAvg;
+    const trend = (recentAvg - prevAvg) * 0.35;
+    const cap = Math.max(1, recentAvg * 3);
+
+    return Array.from({ length: forecastLength }, (_, i) => {
+      const val = recentAvg + trend * (i + 1);
+      return Math.max(0, Math.min(cap, val));
+    });
+  }
+
+  const firstSeason = clean.slice(0, seasonLength);
+  const secondSeason = clean.slice(seasonLength, seasonLength * 2);
+  const avg1 = firstSeason.reduce((a, b) => a + b, 0) / seasonLength;
+  const avg2 = secondSeason.reduce((a, b) => a + b, 0) / seasonLength;
+
+  let level = avg1;
+  let trend = (avg2 - avg1) / seasonLength;
+  const seasonals = new Array(clean.length).fill(0);
+
+  for (let i = 0; i < seasonLength; i++) {
+    seasonals[i] = clean[i] - avg1;
+  }
+
+  for (let t = seasonLength; t < clean.length; t++) {
+    const y = clean[t];
+    const prevLevel = level;
+    const prevSeason = seasonals[t - seasonLength] ?? 0;
+
+    level = alpha * (y - prevSeason) + (1 - alpha) * (level + trend);
+    trend = beta * (level - prevLevel) + (1 - beta) * trend;
+    seasonals[t] = gamma * (y - level) + (1 - gamma) * prevSeason;
+  }
+
+  const recentAvg =
+    clean.slice(-Math.min(6, clean.length)).reduce((a, b) => a + b, 0) / Math.min(6, clean.length);
+  const cap = Math.max(1, recentAvg * 4);
+
+  const forecasts: number[] = [];
+  for (let m = 1; m <= forecastLength; m++) {
+    const sIdx = clean.length - seasonLength + ((m - 1) % seasonLength);
+    const seasonal = seasonals[sIdx] ?? 0;
+    const value = level + m * trend + seasonal;
+    forecasts.push(Math.max(0, Math.min(cap, value)));
+  }
+
+  return forecasts;
+};
+
+const buildDemandForecastPayload = (
+  model: ForecastModel,
+  orders: Array<{ date: string; total: number; items: Array<{ productId: string; quantity: number }> }>,
+  productId?: string
+): Promise<{
+  chartData: Array<{ name: string; hist: number | null; fc: number | null }>;
+  message: string;
+  hasSufficientData: boolean;
+  timeResolution: 'Day' | 'Week' | 'Month';
+  modelRequested: ForecastModel;
+  modelUsed: ForecastModel;
+}> => (async () => {
+  if (productId) {
+    orders = orders.filter((order) => order.items.some((item) => item.productId === productId));
+  }
+
+  if (orders.length === 0) {
+    return {
+      chartData: [{ name: 'No Data', hist: 0, fc: null }],
+      message: productId ? 'No order history found for this product.' : 'No sales data available.',
+      hasSufficientData: false,
+      timeResolution: 'Month',
+      modelRequested: model,
+      modelUsed: model
+    };
+  }
+
+  const timestamps = orders.map((o) => new Date(o.date).getTime()).filter((t) => !Number.isNaN(t));
+  if (timestamps.length === 0) {
+    return {
+      chartData: [{ name: 'No Data', hist: 0, fc: null }],
+      message: productId ? 'No valid date history found for this product.' : 'No sales data available.',
+      hasSufficientData: false,
+      timeResolution: 'Month',
+      modelRequested: model,
+      modelUsed: model
+    };
+  }
+
+  const minTime = Math.min(...timestamps);
+  const maxTime = Math.max(...timestamps);
+  const startDate = new Date(minTime);
+  const endDate = new Date(maxTime);
+
+  const buildTimelineForMode = (mode: 'daily' | 'weekly' | 'monthly') => {
+    const aggregatedUnits: Record<string, number> = {};
+    const getKey = (d: Date) => {
+      if (mode === 'daily') return d.toISOString().split('T')[0];
+      if (mode === 'weekly') return getStartOfWeek(d).toISOString().split('T')[0];
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    };
+
+    orders.forEach((order) => {
+      const dateObj = new Date(order.date);
+      if (Number.isNaN(dateObj.getTime())) return;
+      const key = getKey(dateObj);
+      const qty = productId
+        ? order.items
+            .filter((item) => item.productId === productId)
+            .reduce((sum, item) => sum + item.quantity, 0)
+        : order.items.reduce((sum, item) => sum + item.quantity, 0);
+      aggregatedUnits[key] = (aggregatedUnits[key] || 0) + qty;
+    });
+
+    const timelineData: Array<{ date: Date; units: number }> = [];
+    let current =
+      mode === 'daily'
+        ? getStartOfDay(startDate)
+        : mode === 'weekly'
+          ? getStartOfWeek(startDate)
+          : getStartOfMonth(startDate);
+
+    let loopGuard = 0;
+    while (current <= endDate && loopGuard < 1000) {
+      const key = getKey(current);
+      timelineData.push({
+        date: new Date(current),
+        units: aggregatedUnits[key] || 0
+      });
+      if (mode === 'daily') current.setDate(current.getDate() + 1);
+      else if (mode === 'weekly') current.setDate(current.getDate() + 7);
+      else current.setMonth(current.getMonth() + 1);
+      loopGuard++;
+    }
+
+    let seasonLength = 12;
+    let forecastLength = 6;
+    let timeResolution: 'Day' | 'Week' | 'Month' = 'Month';
+    if (mode === 'daily') {
+      seasonLength = 7;
+      forecastLength = 7;
+      timeResolution = 'Day';
+    } else if (mode === 'weekly') {
+      seasonLength = 4;
+      forecastLength = 8;
+      timeResolution = 'Week';
+    }
+
+    return {
+      mode,
+      seasonLength,
+      forecastLength,
+      timeResolution,
+      timelineData
+    };
+  };
+
+  const candidates = [
+    buildTimelineForMode('daily'),
+    buildTimelineForMode('weekly'),
+    buildTimelineForMode('monthly')
+  ];
+
+  const selectedCandidate =
+    candidates.find((candidate) => candidate.timelineData.length >= candidate.seasonLength * 2) ||
+    [...candidates].reverse().find((candidate) => candidate.timelineData.length > 0) ||
+    candidates[0];
+
+  const { mode, seasonLength, forecastLength, timeResolution, timelineData } = selectedCandidate;
+
+  const historyValues = timelineData.map((d) => d.units);
+  const hasSufficientData = historyValues.length >= seasonLength * 2;
+  const message = hasSufficientData
+    ? `Projecting demand by ${timeResolution} (Holt-Winters)`
+    : `Data accumulation in progress. Need ${seasonLength * 2} ${timeResolution.toLowerCase()}s (Have ${historyValues.length}).`;
+
+  let modelUsed: ForecastModel = model;
+  let forecastedValues: number[] = [];
+  let fallbackNote = '';
+
+  if (hasSufficientData) {
+    if (model === 'fb-prophet') {
+      try {
+        const frequency: ProphetFrequency = mode === 'daily' ? 'D' : mode === 'weekly' ? 'W-MON' : 'MS';
+        const prophetResult = await runFbProphetForecast({
+          history: timelineData.map((point) => ({
+            ds: point.date.toISOString().slice(0, 10),
+            y: point.units
+          })),
+          periods: forecastLength,
+          frequency
+        });
+        forecastedValues = prophetResult.forecast;
+      } catch (err) {
+        modelUsed = 'holt-winters';
+        fallbackNote = err instanceof Error ? err.message : 'FB Prophet is unavailable.';
+        forecastedValues = holtWintersForecast(historyValues, seasonLength, 0.3, 0.1, 0.1, forecastLength);
+      }
+    } else {
+      forecastedValues = holtWintersForecast(historyValues, seasonLength, 0.3, 0.1, 0.1, forecastLength);
+    }
+  }
+
+  const formatLabel = (d: Date) => {
+    if (mode === 'daily') return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    if (mode === 'weekly') return d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' });
+    return d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+  };
+
+  const chartData: Array<{ name: string; hist: number | null; fc: number | null }> = timelineData.map((point) => ({
+    name: formatLabel(point.date),
+    hist: point.units,
+    fc: null
+  }));
+
+  if (hasSufficientData && forecastedValues.length > 0 && timelineData.length > 0) {
+    const lastDate = new Date(timelineData[timelineData.length - 1].date);
+    for (let i = 0; i < forecastedValues.length; i++) {
+      if (mode === 'daily') lastDate.setDate(lastDate.getDate() + 1);
+      else if (mode === 'weekly') lastDate.setDate(lastDate.getDate() + 7);
+      else lastDate.setMonth(lastDate.getMonth() + 1);
+      chartData.push({
+        name: formatLabel(lastDate),
+        hist: null,
+        fc: Math.round(forecastedValues[i])
+      });
+    }
+  }
+
+  return {
+    chartData: chartData.length > 0 ? chartData : [{ name: 'No Data', hist: 0, fc: null }],
+    message: hasSufficientData
+      ? modelUsed === 'fb-prophet'
+        ? `Projecting demand by ${timeResolution} (FB Prophet)`
+        : model === 'fb-prophet' && fallbackNote
+          ? `FB Prophet is unavailable on this server. Falling back to Holt-Winters. ${fallbackNote}`
+          : `Projecting demand by ${timeResolution} (Holt-Winters)`
+      : message,
+    hasSufficientData,
+    timeResolution,
+    modelRequested: model,
+    modelUsed
+  };
+})();
+
+// System logs disabled; user-initiated logs use logActivity
 
 const adjustInventoryForItem = async (
   productId: string,
@@ -333,9 +648,10 @@ export const createOrder = async (req: Request, res: Response) => {
     await pool.query('BEGIN');
 
     const isDraft = normalizedStatus === 'Draft';
+    const deductStock = shouldDeductStock(normalizedStatus);
     const taxRate = await getTaxRate();
     const taxValue = Math.max(0, parseNumber(orderData.subtotal) * taxRate);
-    if (!isDraft) {
+    if (deductStock) {
       await adjustInventoryForOrderItems(orderData.items, 'deduct');
     }
 
@@ -359,7 +675,7 @@ export const createOrder = async (req: Request, res: Response) => {
         orderData.amountPaid,
         orderData.paymentStatus,
         JSON.stringify(orderData.history || []),
-        !isDraft
+        deductStock
       ]
     );
 
@@ -379,7 +695,7 @@ export const createOrder = async (req: Request, res: Response) => {
     });
 
     if (!isDraft && orderData.createdBy === 'buyer') {
-      await createNotification(
+      await createNotificationRecord(
         'Order',
         'New Order Received',
         `Order #${orderId.split('-').pop()} received from buyer.`,
@@ -397,6 +713,12 @@ export const createOrder = async (req: Request, res: Response) => {
     );
 
     await pool.query('COMMIT');
+    emitOrderChanged({
+      action: 'created',
+      orderId,
+      buyerId: String(orderData.buyerId || ''),
+      status: normalizedStatus
+    });
     res.status(201).json(orderResult.rows[0]);
   } catch (err) {
     await pool.query('ROLLBACK');
@@ -406,6 +728,408 @@ export const createOrder = async (req: Request, res: Response) => {
       errorMessage = err.message;
     }
     res.status(500).json({ error: errorMessage });
+  }
+};
+
+// POST /api/orders/checkout
+// Convert a buyer draft into a live order only after payment proof is submitted.
+export const checkoutDraftOrderWithPayment = async (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (!user?.userId) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (user.role !== 'R-BUYER') {
+    return res.status(403).json({ error: 'Insufficient permissions' });
+  }
+
+  const draftId = String(req.body?.draftId || '').trim();
+  const payment = req.body?.payment || {};
+  const payAmount = parseNumber(payment.amount);
+  const method = String(payment.method || '').trim();
+
+  if (!draftId) {
+    return res.status(400).json({ error: 'draftId is required' });
+  }
+  if (!method) {
+    return res.status(400).json({ error: 'Payment method is required' });
+  }
+  if (payAmount <= 0) {
+    return res.status(400).json({ error: 'Payment amount must be greater than zero' });
+  }
+  if (!Number.isFinite(payAmount)) {
+    return res.status(400).json({ error: 'Payment amount must be a valid number' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const draftResult = await client.query(
+      `SELECT id, buyer_id, date, subtotal, tax, total, payment_terms, created_by
+       FROM orders
+       WHERE id = $1 AND buyer_id = $2 AND status = 'Draft'
+       FOR UPDATE`,
+      [draftId, user.userId]
+    );
+
+    if (draftResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Draft order not found' });
+    }
+
+    const draft = draftResult.rows[0];
+    const total = parseNumber(draft.total);
+    if (payAmount > total) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: `Payment cannot exceed order total of ${total}` });
+    }
+
+    const draftItemsResult = await client.query(
+      `SELECT product_id AS "productId", quantity, price_at_order AS "priceAtOrder"
+       FROM order_items
+       WHERE order_id = $1`,
+      [draftId]
+    );
+
+    if (draftItemsResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Draft order has no items' });
+    }
+
+    const orderId = generateEntityId('ORD');
+    const paymentId = generateEntityId('PAY');
+    const historyEntry = {
+      status: 'On Review',
+      date: new Date().toLocaleString(),
+      note: 'Payment submitted. Awaiting seller verification.'
+    };
+
+    await client.query(
+      `INSERT INTO orders (
+        id, buyer_id, date, status, payment_terms, created_by,
+        subtotal, tax, total, amount_paid, payment_status, history, stock_deducted
+      ) VALUES ($1, $2, CURRENT_DATE, 'On Review', $3, 'buyer', $4, $5, $6, 0, 'Unpaid', $7, false)`,
+      [
+        orderId,
+        draft.buyer_id,
+        draft.payment_terms || null,
+        parseNumber(draft.subtotal),
+        parseNumber(draft.tax),
+        total,
+        JSON.stringify([historyEntry])
+      ]
+    );
+
+    for (const item of draftItemsResult.rows) {
+      await client.query(
+        `INSERT INTO order_items (order_id, product_id, quantity, price_at_order, picked)
+         VALUES ($1, $2, $3, $4, false)`,
+        [orderId, item.productId, parseInteger(item.quantity), parseNumber(item.priceAtOrder)]
+      );
+    }
+
+    await client.query(
+      `INSERT INTO payments (
+        id, order_id, buyer_id, credit_request_id, amount, method, reference_id, proof_image, status, notes, date_time
+      ) VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, 'Pending Review', $8, NOW())`,
+      [
+        paymentId,
+        orderId,
+        draft.buyer_id,
+        payAmount,
+        method,
+        payment.referenceId || null,
+        payment.proofImage || null,
+        payment.notes || null
+      ]
+    );
+
+    await client.query('DELETE FROM orders WHERE id = $1', [draftId]);
+
+    await logActivity(
+      req,
+      'Checkout Draft Order',
+      'Orders',
+      `Draft #${draftId.split('-').pop()} checked out as order #${orderId.split('-').pop()} with payment ${paymentId}.`
+    );
+
+    await createNotificationRecord(
+      'Payment',
+      'Payment Proof Submitted',
+      `Order #${orderId.split('-').pop()} is awaiting payment verification.`,
+      'medium',
+      'seller',
+      paymentId
+    );
+
+    await client.query('COMMIT');
+
+    emitOrderChanged({
+      action: 'created',
+      orderId,
+      buyerId: String(draft.buyer_id),
+      status: 'On Review'
+    });
+
+    emitPaymentChanged({
+      action: 'created',
+      paymentId,
+      orderId,
+      buyerId: String(draft.buyer_id),
+      status: 'Pending Review'
+    });
+
+    return res.status(201).json({
+      orderId,
+      paymentId,
+      status: 'On Review'
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Checkout draft order error:', err);
+    return res.status(500).json({ error: 'Failed to checkout draft order' });
+  } finally {
+    client.release();
+  }
+};
+
+// POST /api/orders/checkout-with-credit
+// Convert draft to live order on review, attach credit request, and optional upfront payment proof.
+export const checkoutDraftOrderWithCredit = async (req: Request, res: Response) => {
+  const user = (req as any).user;
+  if (!user?.userId) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  if (user.role !== 'R-BUYER') {
+    return res.status(403).json({ error: 'Insufficient permissions' });
+  }
+
+  const draftId = String(req.body?.draftId || '').trim();
+  const creditRequest = req.body?.creditRequest || {};
+  const payment = req.body?.payment || {};
+
+  const requestedCredit = parseNumber(creditRequest.amount);
+  const paymentTerms = String(creditRequest.paymentTerms || '').trim();
+  const reason = String(creditRequest.reason || '').trim();
+  const notes = String(creditRequest.notes || '').trim();
+  const paymentMethod = String(payment.method || '').trim();
+  const paymentAmount = parseNumber(payment.amount);
+
+  if (!draftId) {
+    return res.status(400).json({ error: 'draftId is required' });
+  }
+  if (requestedCredit <= 0) {
+    return res.status(400).json({ error: 'Credit amount must be greater than zero' });
+  }
+  if (!reason) {
+    return res.status(400).json({ error: 'Credit reason is required' });
+  }
+  if (!['Net 15', 'Net 30'].includes(paymentTerms)) {
+    return res.status(400).json({ error: 'paymentTerms must be Net 15 or Net 30' });
+  }
+  if (notes.length > 1000) {
+    return res.status(400).json({ error: 'Notes cannot exceed 1000 characters' });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const draftResult = await client.query(
+      `SELECT id, buyer_id, subtotal, tax, total, payment_terms
+       FROM orders
+       WHERE id = $1 AND buyer_id = $2 AND status = 'Draft'
+       FOR UPDATE`,
+      [draftId, user.userId]
+    );
+
+    if (draftResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Draft order not found' });
+    }
+
+    const draft = draftResult.rows[0];
+    const total = parseNumber(draft.total);
+    if (requestedCredit > total) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Credit amount cannot exceed order total' });
+    }
+
+    const requiredUpfrontPayment = Math.max(0, Number((total - requestedCredit).toFixed(2)));
+    const isFullCredit = requiredUpfrontPayment <= 0;
+
+    if (!isFullCredit) {
+      if (!paymentMethod) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Payment method is required for partial credit checkout' });
+      }
+    if (paymentAmount <= 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Payment amount must be greater than zero for partial credit checkout' });
+    }
+    if (!Number.isFinite(paymentAmount)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Payment amount must be a valid number for partial credit checkout' });
+    }
+      if (Math.abs(paymentAmount - requiredUpfrontPayment) > 0.01) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: `Payment amount must match remaining upfront amount (${requiredUpfrontPayment})` });
+      }
+      if (!payment.referenceId && !payment.proofImage) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Provide at least a payment reference or proof image for partial credit checkout' });
+      }
+    }
+
+    const draftItemsResult = await client.query(
+      `SELECT product_id AS "productId", quantity, price_at_order AS "priceAtOrder"
+       FROM order_items
+       WHERE order_id = $1`,
+      [draftId]
+    );
+
+    if (draftItemsResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Draft order has no items' });
+    }
+
+    const orderId = generateEntityId('ORD');
+    const creditId = generateEntityId('CR');
+    const paymentId = isFullCredit ? null : generateEntityId('PAY');
+
+    const historyEntry = {
+      status: 'On Review',
+      date: new Date().toLocaleString(),
+      note: isFullCredit
+        ? 'Order submitted with full credit request. Awaiting credit approval.'
+        : 'Order submitted with partial credit request and upfront payment proof. Awaiting review.'
+    };
+
+    await client.query(
+      `INSERT INTO orders (
+        id, buyer_id, date, status, payment_terms, created_by,
+        subtotal, tax, total, amount_paid, payment_status, history, stock_deducted
+      ) VALUES ($1, $2, CURRENT_DATE, 'On Review', $3, 'buyer', $4, $5, $6, 0, 'Unpaid', $7, false)`,
+      [
+        orderId,
+        draft.buyer_id,
+        draft.payment_terms || null,
+        parseNumber(draft.subtotal),
+        parseNumber(draft.tax),
+        total,
+        JSON.stringify([historyEntry])
+      ]
+    );
+
+    for (const item of draftItemsResult.rows) {
+      await client.query(
+        `INSERT INTO order_items (order_id, product_id, quantity, price_at_order, picked)
+         VALUES ($1, $2, $3, $4, false)`,
+        [orderId, item.productId, parseInteger(item.quantity), parseNumber(item.priceAtOrder)]
+      );
+    }
+
+    await client.query(
+      `INSERT INTO credit_requests (
+         id, buyer_id, order_id, amount, reason, payment_terms, status, request_date, notes
+       ) VALUES ($1, $2, $3, $4, $5, $6, 'Pending', CURRENT_DATE, $7)`,
+      [
+        creditId,
+        draft.buyer_id,
+        orderId,
+        requestedCredit,
+        reason,
+        paymentTerms,
+        notes || null
+      ]
+    );
+
+    if (!isFullCredit && paymentId) {
+      await client.query(
+        `INSERT INTO payments (
+          id, order_id, buyer_id, credit_request_id, amount, method, reference_id, proof_image, status, notes, date_time
+        ) VALUES ($1, $2, $3, NULL, $4, $5, $6, $7, 'Pending Review', $8, NOW())`,
+        [
+          paymentId,
+          orderId,
+          draft.buyer_id,
+          paymentAmount,
+          paymentMethod,
+          payment.referenceId || null,
+          payment.proofImage || null,
+          payment.notes || null
+        ]
+      );
+    }
+
+    await client.query('DELETE FROM orders WHERE id = $1', [draftId]);
+
+    await logActivity(
+      req,
+      'Checkout Draft With Credit',
+      'Orders',
+      `Draft #${draftId.split('-').pop()} checked out as order #${orderId.split('-').pop()} with credit request ${creditId}.`
+    );
+
+    await createNotificationRecord(
+      'Payment',
+      'Credit Request Submitted',
+      `Order #${orderId.split('-').pop()} submitted with credit request ${creditId}.`,
+      'medium',
+      'seller',
+      creditId
+    );
+
+    if (!isFullCredit && paymentId) {
+      await createNotificationRecord(
+        'Payment',
+        'Payment Proof Submitted',
+        `Upfront payment proof ${paymentId} was submitted for order #${orderId.split('-').pop()}.`,
+        'medium',
+        'seller',
+        paymentId
+      );
+    }
+
+    await client.query('COMMIT');
+
+    emitOrderChanged({
+      action: 'created',
+      orderId,
+      buyerId: String(draft.buyer_id),
+      status: 'On Review'
+    });
+
+    emitCreditChanged({
+      action: 'created',
+      creditRequestId: creditId,
+      buyerId: String(draft.buyer_id),
+      orderId,
+      status: 'Pending'
+    });
+
+    if (!isFullCredit && paymentId) {
+      emitPaymentChanged({
+        action: 'created',
+        paymentId,
+        orderId,
+        buyerId: String(draft.buyer_id),
+        status: 'Pending Review'
+      });
+    }
+
+    return res.status(201).json({
+      orderId,
+      creditRequestId: creditId,
+      paymentId,
+      status: 'On Review'
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Checkout draft with credit error:', err);
+    return res.status(500).json({ error: 'Failed to checkout draft with credit' });
+  } finally {
+    client.release();
   }
 };
 
@@ -557,6 +1281,12 @@ export const updateOrder = async (req: Request, res: Response) => {
     };
 
     await pool.query('COMMIT');
+    emitOrderChanged({
+      action: 'updated',
+      orderId: id,
+      buyerId: processedOrder.buyerId,
+      status: normalizedStatus
+    });
     res.json(processedOrder);
   } catch (err) {
     await pool.query('ROLLBACK');
@@ -645,6 +1375,32 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
       `Order #${id.split('-').pop()} changed from ${currentStatus} to ${normalizedStatus}.`
     );
 
+    const actorRole = (req as any).user?.role;
+    const buyerNotificationTitles: Record<string, string> = {
+      'On Review': 'Order Under Payment Review',
+      Pending: 'Order Confirmed',
+      Processing: 'Order Processing',
+      Shipped: 'Order Shipped',
+      Delivered: 'Order Delivered',
+      Undelivered: 'Delivery Attempt Failed',
+      Cancelled: 'Order Cancelled',
+      Deleted: 'Order Removed'
+    };
+
+    if (actorRole !== 'R-BUYER' && result.rows[0]?.buyer_id && buyerNotificationTitles[normalizedStatus]) {
+      const baseMessage = `Your order #${id.split('-').pop()} is now ${normalizedStatus}.`;
+      const message = note ? `${baseMessage} Note: ${note}` : baseMessage;
+
+      await createNotificationRecord(
+        'Order',
+        buyerNotificationTitles[normalizedStatus],
+        message,
+        ['Cancelled', 'Undelivered'].includes(normalizedStatus) ? 'medium' : 'low',
+        String(result.rows[0].buyer_id),
+        id
+      );
+    }
+
     // Process the returned order to ensure numeric types
     const processedOrder = {
       id: result.rows[0].id,
@@ -667,6 +1423,12 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
       history: result.rows[0].history || []
     };
 
+    emitOrderChanged({
+      action: 'status-updated',
+      orderId: id,
+      buyerId: processedOrder.buyerId,
+      status: normalizedStatus
+    });
     res.json(processedOrder);
   } catch (err) {
     console.error('Update order status error:', err);
@@ -1026,5 +1788,61 @@ export const getInventoryTurnoverMetrics = async (req: Request, res: Response) =
   } catch (err) {
     console.error('Get inventory turnover metrics error:', err);
     res.status(500).json({ error: 'Failed to fetch inventory turnover metrics' });
+  }
+};
+
+// GET /api/orders/metrics/demand-forecast
+export const getDemandForecastMetrics = async (req: Request, res: Response) => {
+  const productId = getParam(req.query.productId as string | string[] | undefined);
+  const modelParam = getParam(req.query.model as string | string[] | undefined);
+  const model: ForecastModel = modelParam === 'fb-prophet' ? 'fb-prophet' : 'holt-winters';
+
+  try {
+    const ordersResult = await pool.query(
+      `SELECT o.id, o.date, o.status, o.total
+       FROM orders o
+       ORDER BY o.date ASC`
+    );
+
+    const eligibleOrders = ordersResult.rows
+      .map((row: any) => ({
+        ...row,
+        status: normalizeStatus(row.status),
+        total: parseNumber(row.total)
+      }))
+      .filter((row: any) => FORECAST_ELIGIBLE_STATUSES.has(row.status));
+
+    const orderIds = eligibleOrders.map((order: any) => order.id);
+    const itemsByOrder = new Map<string, Array<{ productId: string; quantity: number }>>();
+
+    if (orderIds.length > 0) {
+      const itemsResult = await pool.query(
+        `SELECT order_id, product_id, quantity
+         FROM order_items
+         WHERE order_id = ANY($1::varchar[])`,
+        [orderIds]
+      );
+
+      itemsResult.rows.forEach((row: any) => {
+        const items = itemsByOrder.get(row.order_id) || [];
+        items.push({
+          productId: String(row.product_id),
+          quantity: parseInteger(row.quantity)
+        });
+        itemsByOrder.set(row.order_id, items);
+      });
+    }
+
+    const orders = eligibleOrders.map((order: any) => ({
+      id: String(order.id),
+      date: String(order.date),
+      total: parseNumber(order.total),
+      items: itemsByOrder.get(order.id) || []
+    }));
+
+    res.json(await buildDemandForecastPayload(model, orders, productId || undefined));
+  } catch (err) {
+    console.error('Get demand forecast metrics error:', err);
+    res.status(500).json({ error: 'Failed to fetch demand forecast metrics' });
   }
 };

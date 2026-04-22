@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Product, Category, StorageLocationId } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { DEFAULT_STORAGE_LOCATIONS, fetchStorageLocations } from '../utils/storageLocations';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
 
 const ProductDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -16,6 +17,7 @@ const ProductDetails: React.FC = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [editForm, setEditForm] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshToken, setRefreshToken] = useState(0);
 
   useEffect(() => {
     const fetchProductDetails = async () => {
@@ -55,7 +57,12 @@ const ProductDetails: React.FC = () => {
     };
 
     fetchProductDetails();
-  }, [id, navigate]);
+  }, [id, navigate, refreshToken]);
+
+  useRealtimeEvent<{ productId?: string }>('realtime:inventory', (detail) => {
+    if (!id || (detail?.productId && detail.productId !== id)) return;
+    setRefreshToken((value) => value + 1);
+  });
 
   useEffect(() => {
     let active = true;

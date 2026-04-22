@@ -48,11 +48,14 @@ import BuyerCreditDetails from './pages/BuyerCreditDetails';
 import BuyerOrders from './pages/BuyerOrders';
 import BuyerOrderDetails from './pages/BuyerOrderDetails';
 import BuyerPayment from './pages/BuyerPayment';
+import BuyerPayments from './pages/BuyerPayments';
 import Sidebar from './components/Sidebar';
 import BuyerLayout from './components/BuyerLayout';
 import { Staff } from './types';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { useRealtimeEvent } from './hooks/useRealtimeEvent';
+import { connectRealtime, disconnectRealtime } from './services/realtime';
 
 type PermissionKey =
   | 'Orders'
@@ -66,6 +69,24 @@ type PermissionKey =
   | 'Staff'
   | 'Roles'
   | 'Logs';
+
+const RealtimeBridge: React.FC = () => {
+  const { isAuthenticated } = useAuth();
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      disconnectRealtime();
+      return;
+    }
+
+    const socket = connectRealtime();
+    return () => {
+      socket.off('socket:ready');
+    };
+  }, [isAuthenticated]);
+
+  return null;
+};
 
 // Protected Route Wrapper
 const RequireAuth: React.FC<{ allowedTypes?: string[] }> = ({ allowedTypes }) => {
@@ -126,6 +147,8 @@ const RootRouter: React.FC = () => {
           <Route path="/credit" element={<BuyerCredit />} />
           <Route path="/credit/:id" element={<BuyerCreditDetails />} />
           <Route path="/notifications" element={<BuyerNotifications />} />
+          <Route path="/payments" element={<BuyerPayments />} />
+          <Route path="/payment" element={<BuyerPayment />} />
           <Route path="/payment/:orderId" element={<BuyerPayment />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" />} />
@@ -183,6 +206,7 @@ const App: React.FC = () => {
     <LanguageProvider>
       <AuthProvider>
         <HashRouter>
+          <RealtimeBridge />
           <Routes>
             {/* Public Auth Routes */}
             <Route path="/login" element={<PublicOnlyRoute><AccountType /></PublicOnlyRoute>} />
@@ -245,6 +269,19 @@ const SellerLayout: React.FC<{ children: React.ReactNode, onLogout: () => void }
       isMounted = false;
     };
   }, [location, user, isBuyer]);
+
+  useRealtimeEvent('realtime:notifications', () => {
+    void (async () => {
+      try {
+        const res = await fetch('/api/notifications', { credentials: 'include' });
+        if (!res.ok) return;
+        const data = await res.json();
+        setUnreadCount((data || []).filter((n: any) => !n.isRead).length);
+      } catch (err) {
+        console.error('Failed to refresh notifications:', err);
+      }
+    })();
+  });
 
   const currentPath = location.pathname === '' ? '/' : location.pathname;
   const topLevelPaths = ['/', '/orders', '/products', '/analytics', '/payments', '/buyers', '/staff', '/roles', '/pricing', '/returns', '/credits', '/logs', '/settings'];

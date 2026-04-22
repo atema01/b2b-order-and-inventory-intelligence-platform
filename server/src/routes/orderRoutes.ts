@@ -1,6 +1,7 @@
 // server/src/routes/orderRoutes.ts
 import { Router } from 'express';
-import { getAllOrders,createOrder,updateOrder, updateOrderStatus,getOrderById,updateOrderItemPicked, getMyDraftOrder, upsertDraftOrder, getInventoryTurnoverMetrics} from '../controllers/orderController';
+import { getAllOrders,createOrder,updateOrder, updateOrderStatus,getOrderById,updateOrderItemPicked, getMyDraftOrder, upsertDraftOrder, getInventoryTurnoverMetrics, checkoutDraftOrderWithPayment, checkoutDraftOrderWithCredit } from '../controllers/orderController';
+import { generateDemandForecasts, getDemandForecastMetrics } from '../controllers/forecastController';
 import { authenticateToken } from '../middleware/authMiddleware';
 
 const router = Router();
@@ -9,6 +10,10 @@ router.patch('/:id/status', authenticateToken, updateOrderStatus);
 router.get('/draft', authenticateToken, getMyDraftOrder);
 router.put('/draft', authenticateToken, upsertDraftOrder);
 router.get('/metrics/inventory-turnover', authenticateToken, getInventoryTurnoverMetrics);
+router.get('/metrics/demand-forecast', authenticateToken, getDemandForecastMetrics);
+router.post('/metrics/demand-forecast/generate', authenticateToken, generateDemandForecasts);
+router.post('/checkout', authenticateToken, checkoutDraftOrderWithPayment);
+router.post('/checkout-with-credit', authenticateToken, checkoutDraftOrderWithCredit);
 router.post('/', authenticateToken, createOrder);
 router.put('/:id', authenticateToken, updateOrder);
 router.get('/', authenticateToken, getAllOrders);

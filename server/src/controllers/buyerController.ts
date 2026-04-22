@@ -15,8 +15,6 @@ export const getAllBuyers = async (req: Request, res: Response) => {
         u.email,
         u.phone,
         u.address,
-        u.credit_limit AS "creditLimit",
-        u.available_credit AS "availableCredit",
         u.outstanding_balance AS "outstandingBalance",
         u.payment_terms AS "paymentTerms",
         COALESCE(u.total_spend, 0) AS "totalSpend",
@@ -74,8 +72,6 @@ export const getBuyerById = async (req: Request, res: Response) => {
       email: buyer.email,
       phone: buyer.phone,
       address: buyer.address,
-      creditLimit: buyer.credit_limit,
-      availableCredit: buyer.available_credit,
       outstandingBalance: buyer.outstanding_balance,
       paymentTerms: buyer.payment_terms,
       totalSpend: buyer.total_spend || 0,
@@ -127,8 +123,6 @@ export const updateBuyer = async (req: Request, res: Response) => {
       // Map frontend field names to database column names
       const dbField = field === 'companyName' ? 'company_name' :
                      field === 'contactPerson' ? 'name' :
-                     field === 'creditLimit' ? 'credit_limit' :
-                     field === 'availableCredit' ? 'available_credit' :
                      field === 'outstandingBalance' ? 'outstanding_balance' :
                      field === 'paymentTerms' ? 'payment_terms' :
                      field === 'totalSpend' ? 'total_spend' :

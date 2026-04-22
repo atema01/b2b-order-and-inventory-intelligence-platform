@@ -1,16 +1,19 @@
 
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Buyer, Payment, PaymentStatus } from '../types';
+import { Buyer, CreditRequest, Payment, PaymentStatus } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
 
 const Payments: React.FC = () => {
   const navigate = useNavigate();
   const [payments, setPayments] = useState<Payment[]>([]);
   const [buyers, setBuyers] = useState<Buyer[]>([]);
+  const [credits, setCredits] = useState<CreditRequest[]>([]);
   const [activeFilter, setActiveFilter] = useState<string>('All');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [refreshToken, setRefreshToken] = useState(0);
   const { t } = useLanguage();
 
   useEffect(() => {
@@ -20,9 +23,10 @@ const Payments: React.FC = () => {
       setLoading(true);
       setError('');
       try {
-        const [paymentsRes, buyersRes] = await Promise.all([
+        const [paymentsRes, buyersRes, creditsRes] = await Promise.all([
           fetch('/api/payments', { credentials: 'include' }),
-          fetch('/api/buyers', { credentials: 'include' })
+          fetch('/api/buyers', { credentials: 'include' }),
+          fetch('/api/credits', { credentials: 'include' })
         ]);
 
         if (!paymentsRes.ok) {
@@ -33,10 +37,12 @@ const Payments: React.FC = () => {
         // Buyers lookup is optional; users with Payments-only permission may not have Buyers permission.
         const paymentsData = await paymentsRes.json();
         const buyersData = buyersRes.ok ? await buyersRes.json() : [];
+        const creditsData = creditsRes.ok ? await creditsRes.json() : [];
 
         if (!isMounted) return;
         setPayments(Array.isArray(paymentsData) ? paymentsData : []);
         setBuyers(Array.isArray(buyersData) ? buyersData : []);
+        setCredits(Array.isArray(creditsData) ? creditsData : []);
       } catch (err) {
         console.error('Load payments error:', err);
         if (isMounted) {
@@ -52,7 +58,15 @@ const Payments: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [refreshToken]);
+
+  useRealtimeEvent('realtime:payments', () => {
+    setRefreshToken((value) => value + 1);
+  });
+
+  useRealtimeEvent('realtime:credits', () => {
+    setRefreshToken((value) => value + 1);
+  });
 
   const filters = [
     { id: 'All', label: t('cat.all') },
@@ -65,6 +79,13 @@ const Payments: React.FC = () => {
   const filteredPayments = payments.filter(p => 
     activeFilter === 'All' ? true : p.status === activeFilter
   );
+
+  const getAssociatedCredit = (payment: Payment): CreditRequest | null => {
+    if (payment.creditRequestId) {
+      return credits.find((credit) => credit.id === payment.creditRequestId) || null;
+    }
+    return credits.find((credit) => credit.orderId === payment.orderId) || null;
+  };
 
   const getStatusColor = (status: PaymentStatus) => {
     switch (status) {
@@ -113,23 +134,24 @@ const Payments: React.FC = () => {
       )}
 
 
-      {/* Filter Tabs */}
-      <div className={`flex gap-2 overflow-x-auto pb-2 scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0 ${loading || error ? 'pointer-events-none opacity-60' : ''}`}>
-        {filters.map(filter => (
-          <button
-            key={filter.id}
-            onClick={() => setActiveFilter(filter.id)}
-            className={`
-              px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest whitespace-nowrap border transition-all
-              ${activeFilter === filter.id 
-                ? 'bg-primary border-primary text-white shadow-lg shadow-primary/20' 
-                : 'bg-white border-gray-100 text-slate-500 hover:bg-gray-50'}
-            `}
-          >
-            {filter.label}
-          </button>
-        ))}
-      </div>
+      {!loading && (
+        <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0">
+          {filters.map(filter => (
+            <button
+              key={filter.id}
+              onClick={() => setActiveFilter(filter.id)}
+              className={`
+                px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest whitespace-nowrap border transition-all
+                ${activeFilter === filter.id 
+                  ? 'bg-primary border-primary text-white shadow-lg shadow-primary/20' 
+                  : 'bg-white border-gray-100 text-slate-500 hover:bg-gray-50'}
+              `}
+            >
+              {filter.label}
+            </button>
+          ))}
+        </div>
+      )}
       {!loading && !error && (
       <div className="bg-white rounded-[32px] border border-gray-100 shadow-sm overflow-hidden">
         {/* Desktop View */}
@@ -138,6 +160,8 @@ const Payments: React.FC = () => {
             <thead className="bg-gray-50 text-[10px] font-black uppercase text-gray-400 tracking-widest">
               <tr>
                 <th className="px-6 py-5">{t('payments.reference')}</th>
+                <th className="px-6 py-5">{t('order.lifecycle')}</th>
+                <th className="px-6 py-5">Associated Credit</th>
                 <th className="px-6 py-5">{t('common.buyer')}</th>
                 <th className="px-6 py-5">{t('common.revenue')}</th>
                 <th className="px-6 py-5">{t('payments.submissionTime')}</th>
@@ -149,6 +173,7 @@ const Payments: React.FC = () => {
               {filteredPayments.map(p => {
                 const buyer = buyers.find(b => b.id === p.buyerId);
                 const buyerLabel = buyer?.companyName || p.buyerId || 'Unknown Buyer';
+                const associatedCredit = getAssociatedCredit(p);
                 return (
                   <tr
                     key={p.id}
@@ -165,6 +190,34 @@ const Payments: React.FC = () => {
                     aria-label={`Open payment ${p.referenceId}`}
                   >
                     <td className="px-6 py-5 font-bold text-slate-800">{p.referenceId}</td>
+                    <td className="px-6 py-5">
+                      <span className="inline-flex rounded-lg bg-slate-100 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-slate-700">
+                        #{String(p.orderId || '').replace('ORD-', '') || '---'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-5">
+                      {associatedCredit ? (
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex rounded-lg bg-cyan-50 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-cyan-700">
+                            {associatedCredit.id}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              navigate(`/credits/${associatedCredit.id}`);
+                            }}
+                            className="inline-flex items-center gap-1 rounded-lg border border-cyan-200 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wider text-cyan-700 hover:bg-cyan-50 transition-colors"
+                          >
+                            <span className="material-symbols-outlined text-xs">open_in_new</span>
+                            Go to Credit
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-[11px] font-semibold text-slate-400">No Credit</span>
+                      )}
+                    </td>
                     <td className="px-6 py-5 font-semibold text-slate-600">{buyerLabel}</td>
                     <td className="px-6 py-5 font-black text-primary">ETB {p.amount.toLocaleString()}</td>
                     <td className="px-6 py-5 text-sm text-gray-400">{p.dateTime}</td>
@@ -186,12 +239,33 @@ const Payments: React.FC = () => {
           {filteredPayments.map(p => {
              const buyer = buyers.find(b => b.id === p.buyerId);
              const buyerLabel = buyer?.companyName || p.buyerId || 'Unknown Buyer';
+             const associatedCredit = getAssociatedCredit(p);
              return (
               <Link key={p.id} to={`/payments/${p.id}`} className="p-5 flex flex-col gap-4 active:bg-gray-50 transition-all">
                 <div className="flex justify-between items-start">
                   <div className="space-y-1">
                     <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest leading-none">{t('payments.reference')}</p>
                     <p className="font-black text-slate-800 text-lg">{p.referenceId}</p>
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                      Order #{String(p.orderId || '').replace('ORD-', '') || '---'}
+                    </p>
+                    <p className="text-[10px] font-bold text-cyan-700 uppercase tracking-widest">
+                      Credit {associatedCredit?.id || 'None'}
+                    </p>
+                    {associatedCredit && (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          navigate(`/credits/${associatedCredit.id}`);
+                        }}
+                        className="mt-1 inline-flex items-center gap-1 rounded-lg border border-cyan-200 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wider text-cyan-700 hover:bg-cyan-50 transition-colors"
+                      >
+                        <span className="material-symbols-outlined text-xs">open_in_new</span>
+                        Go to Credit
+                      </button>
+                    )}
                   </div>
                   <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-wider ${getStatusColor(p.status)}`}>
                     {getStatusLabel(p.status)}

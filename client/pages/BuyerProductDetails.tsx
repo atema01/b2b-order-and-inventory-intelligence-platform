@@ -1,53 +1,36 @@
 ﻿
-import React, { useState, useEffect } from 'react';
+import React from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Product } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import LoadingState from '../components/LoadingState';
 import { addToCart as addToCartStore } from '../services/cartStore';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
+import RefreshIndicator from '../components/RefreshIndicator';
+import { buyerQueryKeys, loadBuyerProduct } from '../services/buyerQueries';
 
 const BuyerProductDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   const { t } = useLanguage();
-  const [product, setProduct] = useState<Product | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
+  const queryClient = useQueryClient();
+  const {
+    data: product,
+    isLoading,
+    isFetching,
+    error
+  } = useQuery({
+    queryKey: buyerQueryKeys.productDetails(id),
+    queryFn: () => loadBuyerProduct(id)
+  });
   const query = new URLSearchParams(location.search).get('q')?.trim().toLowerCase() || '';
 
-  useEffect(() => {
-    let isMounted = true;
-
-    const loadProduct = async () => {
-      if (!id) return;
-      setIsLoading(true);
-      setError('');
-      try {
-        const res = await fetch(`/api/products/${id}`, { credentials: 'include' });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || 'Failed to load product');
-        }
-        const data = await res.json();
-        if (!isMounted) return;
-        setProduct(data);
-      } catch (err) {
-        console.error('Load product error:', err);
-        if (isMounted) {
-          setError(err instanceof Error ? err.message : 'Failed to load product');
-        }
-      } finally {
-        if (isMounted) setIsLoading(false);
-      }
-    };
-
-    loadProduct();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [id]);
+  useRealtimeEvent<{ productId?: string }>('realtime:inventory', (detail) => {
+    if (!id || (detail?.productId && detail.productId !== id)) return;
+    queryClient.invalidateQueries({ queryKey: ['buyer-product-details'] });
+  });
 
   const addToCart = (productId: string) => {
     addToCartStore(productId, 1);
@@ -57,8 +40,15 @@ const BuyerProductDetails: React.FC = () => {
   if (isLoading) return <LoadingState message="Loading product..." />;
   if (error) {
     return (
-      <div className="p-8 text-center text-red-600 font-bold">
-        {error}
+      <div className="p-8 text-center">
+        <p className="font-bold text-red-600">Failed to load product.</p>
+        <p className="mt-2 text-sm text-red-500">{error instanceof Error ? error.message : 'An unexpected error occurred.'}</p>
+        <button
+          onClick={() => queryClient.invalidateQueries({ queryKey: buyerQueryKeys.productDetails(id) })}
+          className="mt-4 rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-red-700"
+        >
+          Retry
+        </button>
       </div>
     );
   }
@@ -86,6 +76,7 @@ const BuyerProductDetails: React.FC = () => {
           <span className="material-symbols-outlined">arrow_back</span>
         </button>
         <h1 className="text-xl font-black text-slate-900">Product Details</h1>
+        <RefreshIndicator visible={isFetching && !isLoading} />
       </div>
 
       {!pageMatches ? (

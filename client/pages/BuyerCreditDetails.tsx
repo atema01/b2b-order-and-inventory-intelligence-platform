@@ -1,7 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { CreditRequest, Order } from '../types';
 import LoadingState from '../components/LoadingState';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
+import RefreshIndicator from '../components/RefreshIndicator';
+import { buyerQueryKeys, loadBuyerCreditDetails } from '../services/buyerQueries';
 
 const formatCurrency = (amount: number) => `ETB ${amount.toLocaleString()}`;
 
@@ -10,8 +14,8 @@ const BuyerCreditDetails: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [request, setRequest] = useState<CreditRequest | null>(null);
-  const [order, setOrder] = useState<Order | null>(null);
+  const orderPaymentFileRef = useRef<HTMLInputElement>(null);
+  const queryClient = useQueryClient();
   const [repaymentAmount, setRepaymentAmount] = useState(0);
   const [repaymentAmountInput, setRepaymentAmountInput] = useState('');
   const [repaymentNote, setRepaymentNote] = useState('');
@@ -19,90 +23,40 @@ const BuyerCreditDetails: React.FC = () => {
   const [repaymentProof, setRepaymentProof] = useState('');
   const [selectedRepaymentPercentage, setSelectedRepaymentPercentage] = useState(100);
   const [isRepaymentModalOpen, setIsRepaymentModalOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState('');
+  const [isOrderPaymentModalOpen, setIsOrderPaymentModalOpen] = useState(false);
+  const [orderPaymentMethod, setOrderPaymentMethod] = useState('Bank Transfer');
+  const [orderPaymentReference, setOrderPaymentReference] = useState('');
+  const [orderPaymentProof, setOrderPaymentProof] = useState('');
+  const [orderPaymentNote, setOrderPaymentNote] = useState('');
   const query = new URLSearchParams(location.search).get('q')?.trim().toLowerCase() || '';
+  const {
+    data,
+    isLoading,
+    isFetching,
+    error
+  } = useQuery({
+    queryKey: buyerQueryKeys.creditDetails(id),
+    queryFn: () => loadBuyerCreditDetails(id)
+  });
+  const request = data?.request ?? null;
+  const order = data?.order ?? null;
+
+  useRealtimeEvent<{ creditRequestId?: string }>('realtime:credits', (detail) => {
+    if (!id || detail?.creditRequestId !== id) return;
+    queryClient.invalidateQueries({ queryKey: ['buyer-credit-details'] });
+  });
+
+  useRealtimeEvent<{ creditRequestId?: string }>('realtime:payments', (detail) => {
+    if (!id || detail?.creditRequestId !== id) return;
+    queryClient.invalidateQueries({ queryKey: ['buyer-credit-details'] });
+  });
 
   useEffect(() => {
-    let isMounted = true;
-
-    const loadCredit = async () => {
-      if (!id) {
-        setIsLoading(false);
-        return;
-      }
-
-      setIsLoading(true);
-      setError('');
-
-      try {
-        const creditRes = await fetch('/api/credits/my', { credentials: 'include' });
-        if (!creditRes.ok) {
-          const data = await creditRes.json().catch(() => ({}));
-          throw new Error(data.error || 'Failed to load credit');
-        }
-
-        const creditList: CreditRequest[] = await creditRes.json();
-        const creditData = Array.isArray(creditList)
-          ? creditList.find((credit) => credit.id === id) || null
-          : null;
-
-        if (!creditData) {
-          throw new Error('Credit request not found');
-        }
-
-        const orderRes = creditData.orderId
-          ? await fetch(`/api/orders/${creditData.orderId}`, { credentials: 'include' })
-          : null;
-
-        if (!isMounted) return;
-
-        setRequest(creditData);
-        setRepaymentAmount(creditData.outstandingAmount || 0);
-        setRepaymentAmountInput(String(creditData.outstandingAmount || 0));
-
-        if (orderRes?.ok) {
-          const orderData = await orderRes.json();
-          if (isMounted) setOrder(orderData);
-        } else {
-          setOrder(null);
-        }
-      } catch (err) {
-        console.error('Failed to load credit details:', err);
-        if (isMounted) {
-          setError(err instanceof Error ? err.message : 'Failed to load credit details.');
-        }
-      } finally {
-        if (isMounted) setIsLoading(false);
-      }
-    };
-
-    loadCredit();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [id]);
-
-  const refreshCredit = async () => {
-    if (!id) return;
-    const creditRes = await fetch('/api/credits/my', { credentials: 'include' });
-    if (!creditRes.ok) return;
-    const creditList: CreditRequest[] = await creditRes.json();
-    const creditData = Array.isArray(creditList)
-      ? creditList.find((credit) => credit.id === id) || null
-      : null;
-    if (!creditData) return;
-    setRequest(creditData);
-    setRepaymentAmount(creditData.outstandingAmount || 0);
-    setRepaymentAmountInput(String(creditData.outstandingAmount || 0));
-    setRepaymentNote('');
-    setRepaymentReference('');
-    setRepaymentProof('');
-    setSelectedRepaymentPercentage(100);
-    setIsRepaymentModalOpen(false);
-  };
+    if (!request) return;
+    setRepaymentAmount(request.outstandingAmount || 0);
+    setRepaymentAmountInput(String(request.outstandingAmount || 0));
+  }, [request]);
 
   const applyRepaymentPercentage = (outstandingAmount: number, percentage: number) => {
     const nextOutstanding = outstandingAmount;
@@ -132,6 +86,28 @@ const BuyerCreditDetails: React.FC = () => {
       setRepaymentProof(reader.result as string);
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleOrderPaymentProofChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setOrderPaymentProof(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const openOrderPaymentModal = () => {
+    setOrderPaymentMethod('Bank Transfer');
+    setOrderPaymentReference('');
+    setOrderPaymentProof('');
+    setOrderPaymentNote('');
+    if (orderPaymentFileRef.current) {
+      orderPaymentFileRef.current.value = '';
+    }
+    setIsOrderPaymentModalOpen(true);
   };
 
   const handleRepayment = async (event: React.FormEvent) => {
@@ -193,7 +169,12 @@ const BuyerCreditDetails: React.FC = () => {
         throw new Error(data.error || 'Failed to repay credit');
       }
 
-      await refreshCredit();
+      await queryClient.invalidateQueries({ queryKey: buyerQueryKeys.creditDetails(id) });
+      setRepaymentNote('');
+      setRepaymentReference('');
+      setRepaymentProof('');
+      setSelectedRepaymentPercentage(100);
+      setIsRepaymentModalOpen(false);
       alert('Credit repayment submitted successfully. It is now waiting for seller verification.');
     } catch (err) {
       console.error('Credit repayment error:', err);
@@ -203,13 +184,93 @@ const BuyerCreditDetails: React.FC = () => {
     }
   };
 
+  const handleOrderReleasePayment = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!order) return;
+
+    const remainingForRelease = Math.max(0, Number((order.total - (order.amountPaid || 0)).toFixed(2)));
+    const trimmedReference = orderPaymentReference.trim();
+    const trimmedNote = orderPaymentNote.trim();
+
+    if (remainingForRelease <= 0) {
+      alert('No remaining amount to pay for order release.');
+      return;
+    }
+    if (!trimmedReference && !orderPaymentProof.trim()) {
+      alert('Please provide a payment reference or proof image.');
+      return;
+    }
+    if (trimmedReference.length > 100) {
+      alert('Payment reference cannot exceed 100 characters.');
+      return;
+    }
+    if (trimmedNote.length > 1000) {
+      alert('Payment note cannot exceed 1000 characters.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const response = await fetch('/api/payments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          orderId: order.id,
+          amount: remainingForRelease,
+          method: orderPaymentMethod,
+          referenceId: trimmedReference || null,
+          proofImage: orderPaymentProof.trim() || null,
+          notes: trimmedNote || null
+        })
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to submit payment');
+      }
+
+      await queryClient.invalidateQueries({ queryKey: buyerQueryKeys.creditDetails(id) });
+      await queryClient.invalidateQueries({ queryKey: ['buyer-orders'] });
+      setIsOrderPaymentModalOpen(false);
+      alert('Payment submitted for review. Once approved, your order will move to pending.');
+    } catch (err) {
+      console.error('Order release payment error:', err);
+      alert(err instanceof Error ? err.message : 'Failed to submit payment.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   if (isLoading) return <LoadingState message="Loading credit details..." />;
-  if (error) return <div className="p-8 text-red-600 font-semibold">{error}</div>;
+  if (error) {
+    return (
+      <div className="p-8">
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-center">
+          <p className="mb-2 font-semibold text-red-700">Failed to load credit details.</p>
+          <p className="mb-4 text-sm text-red-600">{error instanceof Error ? error.message : 'An unexpected error occurred.'}</p>
+          <button
+            onClick={() => queryClient.invalidateQueries({ queryKey: buyerQueryKeys.creditDetails(id) })}
+            className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-red-700"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (!request) return <div className="p-8">Credit record not found.</div>;
 
   const approved = request.approvedAmount || 0;
   const repaid = request.repaidAmount || 0;
   const unpaid = request.outstandingAmount ?? Math.max(approved - repaid, 0);
+  const orderRemainingBalance = order ? Math.max(0, Number((order.total - (order.amountPaid || 0)).toFixed(2))) : 0;
+  const orderStatus = String(order?.status || '').trim().toUpperCase();
+  const canPayForOrderRelease =
+    Boolean(order) &&
+    orderStatus === 'ON REVIEW' &&
+    request.status === 'Partially Approved' &&
+    orderRemainingBalance > 0;
   const isRepayable =
     (request.status === 'Approved' || request.status === 'Partially Approved' || request.status === 'Partially Paid') &&
     unpaid > 0;
@@ -244,6 +305,7 @@ const BuyerCreditDetails: React.FC = () => {
           <h1 className="text-2xl font-black text-slate-900">Credit Details</h1>
           <p className="text-sm font-medium text-slate-500">Track this credit request and record repayments.</p>
         </div>
+        <RefreshIndicator visible={isFetching && !isLoading} />
       </div>
 
       {!pageMatches ? (
@@ -329,7 +391,19 @@ const BuyerCreditDetails: React.FC = () => {
                 <p className="text-sm text-slate-500">Date: {order.date}</p>
                 <p className="text-sm text-slate-500">Total: {formatCurrency(order.total)}</p>
                 <p className="text-sm text-slate-500">Amount Paid: {formatCurrency(order.amountPaid || 0)}</p>
+                <p className="text-sm text-slate-500">Status: {order.status}</p>
+                <p className="text-sm text-slate-500">Remaining to Release: {formatCurrency(orderRemainingBalance)}</p>
                 <p className="text-sm text-slate-500">Outstanding Credit: {formatCurrency(unpaid)}</p>
+                {canPayForOrderRelease && (
+                  <button
+                    type="button"
+                    onClick={openOrderPaymentModal}
+                    className="mt-2 inline-flex items-center justify-center gap-2 rounded-2xl border border-[#00A3C4]/30 bg-[#E0F7FA] px-5 py-3 text-xs font-black uppercase tracking-widest text-[#008FAE] transition-all hover:border-[#00A3C4] hover:bg-[#d3f4f8]"
+                  >
+                    <span className="material-symbols-outlined text-base">payments</span>
+                    Pay Remaining For Release
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => openRepaymentModal(unpaid)}
@@ -349,6 +423,132 @@ const BuyerCreditDetails: React.FC = () => {
         </section>
       </div>
       </>
+      )}
+
+      {isOrderPaymentModalOpen && (
+        <div className="fixed inset-0 z-[60] bg-slate-900/50 backdrop-blur-sm overflow-y-auto px-4 py-8 sm:py-10">
+          <div className="min-h-full flex items-start justify-center">
+            <div className="w-full max-w-lg rounded-[32px] bg-white shadow-2xl border border-white/60 overflow-hidden my-auto max-h-[calc(100vh-4rem)] flex flex-col">
+              <div className="p-8 pb-6 border-b border-slate-100">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-center gap-4">
+                    <div className="size-14 rounded-2xl bg-[#E0F7FA] text-[#00A3C4] flex items-center justify-center shrink-0">
+                      <span className="material-symbols-outlined text-2xl">payments</span>
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-black text-slate-900">Pay Remaining Balance</h3>
+                      <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mt-1">
+                        Submit ETB {orderRemainingBalance.toLocaleString(undefined, { maximumFractionDigits: 2 })} to release order
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsOrderPaymentModalOpen(false)}
+                    className="size-10 rounded-xl bg-slate-100 text-slate-500 hover:bg-slate-200 transition-all flex items-center justify-center"
+                  >
+                    <span className="material-symbols-outlined">close</span>
+                  </button>
+                </div>
+              </div>
+
+              <form onSubmit={handleOrderReleasePayment} className="p-8 space-y-6 overflow-y-auto">
+                <div>
+                  <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Payment Method</label>
+                  <div className="relative mt-2">
+                    <select
+                      className="w-full appearance-none bg-slate-50 border border-slate-200 rounded-2xl p-4 pr-12 text-sm font-bold text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
+                      value={orderPaymentMethod}
+                      onChange={(e) => setOrderPaymentMethod(e.target.value)}
+                    >
+                      <option>Bank Transfer</option>
+                      <option>Mobile Money (CBE Birr/Telebirr)</option>
+                      <option>Check Deposit</option>
+                      <option>Cash Deposit</option>
+                    </select>
+                    <span className="absolute right-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 pointer-events-none">expand_more</span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Payment Reference</label>
+                  <input
+                    value={orderPaymentReference}
+                    onChange={(e) => setOrderPaymentReference(e.target.value)}
+                    className="mt-2 w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm font-medium text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
+                    placeholder="e.g. FT23098123"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Payment Proof</label>
+                    {orderPaymentProof && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOrderPaymentProof('');
+                          if (orderPaymentFileRef.current) orderPaymentFileRef.current.value = '';
+                        }}
+                        className="text-[10px] font-black uppercase tracking-widest text-red-500"
+                      >
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    ref={orderPaymentFileRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleOrderPaymentProofChange}
+                    className="hidden"
+                  />
+                  {orderPaymentProof ? (
+                    <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white">
+                      <img src={orderPaymentProof} alt="Order payment proof" className="h-48 w-full object-cover" />
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => orderPaymentFileRef.current?.click()}
+                      className="w-full rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-center text-xs font-bold text-slate-500 hover:border-[#00A3C4] hover:text-[#00A3C4] transition-all"
+                    >
+                      Upload payment proof (if no reference)
+                    </button>
+                  )}
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Payment Note (Optional)</label>
+                  <textarea
+                    rows={2}
+                    value={orderPaymentNote}
+                    onChange={(e) => setOrderPaymentNote(e.target.value)}
+                    className="mt-2 w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm font-medium text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
+                    placeholder="Add note for this payment"
+                  />
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsOrderPaymentModalOpen(false)}
+                    className="flex-1 py-3.5 bg-slate-100 text-slate-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-200 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmitting}
+                    className="flex-[1.4] py-3.5 bg-[#00A3C4] text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-[#00A3C4]/20 hover:bg-[#008CA8] disabled:opacity-60 disabled:cursor-not-allowed transition-all"
+                  >
+                    {isSubmitting ? 'Submitting...' : 'Submit Payment'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
       )}
 
       {isRepaymentModalOpen && (

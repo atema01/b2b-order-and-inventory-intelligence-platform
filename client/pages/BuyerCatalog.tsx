@@ -1,23 +1,21 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { Product, Order, OrderStatus, Category } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingState from '../components/LoadingState';
 import { getCart, setCart as setCartStore, clearCart } from '../services/cartStore';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
+import RefreshIndicator from '../components/RefreshIndicator';
+import { buyerQueryKeys, loadBuyerCatalogData } from '../services/buyerQueries';
 
 const BuyerCatalog: React.FC = () => {
   const { t } = useLanguage();
   const { user } = useAuth();
-  const [products, setProducts] = useState<Product[]>([]);
-  const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
-  const [taxRate, setTaxRate] = useState(0.15);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
   
   // Cart State
   const [cart, setCart] = useState<{ productId: string; quantity: number }[]>(() => getCart());
@@ -27,103 +25,66 @@ const BuyerCatalog: React.FC = () => {
   const [creditAmount, setCreditAmount] = useState('');
   const [creditReason, setCreditReason] = useState('');
   const [creditPaymentTerms, setCreditPaymentTerms] = useState<'Net 15' | 'Net 30'>('Net 15');
+  const [creditPaymentMethod, setCreditPaymentMethod] = useState('Bank Transfer');
+  const [creditPaymentReference, setCreditPaymentReference] = useState('');
+  const [creditPaymentProof, setCreditPaymentProof] = useState('');
+  const [creditPaymentNotes, setCreditPaymentNotes] = useState('');
   const [selectedCreditPercentage, setSelectedCreditPercentage] = useState<number>(100);
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
   const [draftId, setDraftId] = useState<string | null>(null);
+  const [isListView, setIsListView] = useState(false);
   const cartInitRef = useRef(false);
+  const draftHydratedRef = useRef<string | null>(null);
+  const creditPaymentFileRef = useRef<HTMLInputElement>(null);
   
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const queryClient = useQueryClient();
   const query = new URLSearchParams(location.search).get('q')?.trim().toLowerCase() || '';
   const draftParam = searchParams.get('draftId');
   const openCartParam = searchParams.get('openCart');
+  const {
+    data: catalogData,
+    isLoading,
+    isFetching,
+    error
+  } = useQuery({
+    queryKey: buyerQueryKeys.catalog(user?.id, draftParam),
+    queryFn: () => loadBuyerCatalogData(user?.id, draftParam)
+  });
+
+  const products = catalogData?.products ?? [];
+  const categories = catalogData?.categories ?? [];
+  const taxRate = catalogData?.taxRate ?? 0.15;
 
   useEffect(() => {
-    let isMounted = true;
-
-    const loadCatalog = async () => {
-      setIsLoading(true);
-      setError('');
-
-      try {
-        const [productsRes, categoriesRes, taxRes] = await Promise.all([
-          fetch('/api/products', { credentials: 'include' }),
-          fetch('/api/categories', { credentials: 'include' }),
-          fetch('/api/settings/tax-rate', { credentials: 'include' })
-        ]);
-
-        if (!productsRes.ok || !categoriesRes.ok) {
-          throw new Error('Failed to load catalog data');
-        }
-
-        const productsData = await productsRes.json();
-        const categoriesData = await categoriesRes.json();
-        const taxData = taxRes.ok ? await taxRes.json() : null;
-
-        const productsArray = Array.isArray(productsData) ? productsData : (productsData?.data || []);
-
-        if (!isMounted) return;
-
-        setProducts(productsArray);
-        setFilteredProducts(productsArray);
-        setCategories(categoriesData || []);
-        setTaxRate(taxData?.taxRate ?? 0.15);
-
-        // Check for draftId to load
-        const paramDraftId = searchParams.get('draftId');
-        if (paramDraftId && user?.id) {
-          setDraftId(paramDraftId);
-          const draftRes = await fetch(`/api/orders/${paramDraftId}`, { credentials: 'include' });
-          if (draftRes.ok) {
-            const draftOrder = await draftRes.json();
-            if (draftOrder?.buyerId === user.id) {
-              setCart((draftOrder.items || []).map((i: any) => ({ productId: i.productId, quantity: i.quantity })));
-              setIsCartOpen(true);
-            }
-          }
-        } else {
-          // Load latest draft if it exists; otherwise use in-memory store
-          if (user?.id) {
-            const draftRes = await fetch('/api/orders/draft', { credentials: 'include' });
-            if (draftRes.ok) {
-              const draftOrder = await draftRes.json();
-              if (draftOrder?.id && draftOrder?.items?.length) {
-                setDraftId(draftOrder.id);
-                setCart((draftOrder.items || []).map((i: any) => ({ productId: i.productId, quantity: i.quantity })));
-              } else {
-                setCart(getCart());
-              }
-            } else {
-              setCart(getCart());
-            }
-          } else {
-            setCart(getCart());
-          }
-        }
-      } catch (err) {
-        console.error('Failed to load catalog:', err);
-        if (isMounted) {
-          setError('Failed to load catalog data.');
-        }
-      } finally {
-        if (isMounted) setIsLoading(false);
+    if (!catalogData) return;
+    const hydrateKey = `${draftParam || 'latest'}:${catalogData.draftId || 'none'}`;
+    if (draftHydratedRef.current === hydrateKey) return;
+    draftHydratedRef.current = hydrateKey;
+    setDraftId(catalogData.draftId);
+    if (catalogData.draftItems.length > 0) {
+      setCart(catalogData.draftItems);
+      if (draftParam) {
+        setIsCartOpen(true);
       }
-    };
+      return;
+    }
+    setCart(getCart());
+  }, [catalogData, draftParam]);
 
-    loadCatalog();
-
-    // Check query param to open cart automatically (Mobile behavior)
+  useEffect(() => {
     if (searchParams.get('openCart') === 'true') {
       setIsCartOpen(true);
       searchParams.delete('openCart');
       setSearchParams(searchParams);
     }
+  }, [openCartParam, searchParams, setSearchParams]);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [draftParam, openCartParam, setSearchParams, user?.id]);
+  useRealtimeEvent('realtime:inventory', () => {
+    queryClient.invalidateQueries({ queryKey: ['buyer-catalog'] });
+  });
 
   // Save Cart Effect
   useEffect(() => {
@@ -140,12 +101,21 @@ const BuyerCatalog: React.FC = () => {
     if (!user?.id) return;
     const handler = setTimeout(async () => {
       try {
-        await fetch('/api/orders/draft', {
+        const response = await fetch('/api/orders/draft', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
           body: JSON.stringify({ items: cart })
         });
+
+        if (response.ok) {
+          const data = await response.json().catch(() => null);
+          if (data?.id) {
+            setDraftId((currentDraftId) => currentDraftId === data.id ? currentDraftId : data.id);
+          } else if (cart.length === 0) {
+            setDraftId(null);
+          }
+        }
       } catch (err) {
         console.error('Failed to save draft:', err);
       }
@@ -159,22 +129,16 @@ const BuyerCatalog: React.FC = () => {
   useEffect(() => {
     setSearchQuery(query);
   }, [query]);
-
-  useEffect(() => {
-    let result = products;
-    if (activeCategory !== 'All') {
-      result = result.filter(p => p.category === activeCategory);
-    }
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      result = result.filter(p => 
-        p.name.toLowerCase().includes(q) || 
-        p.sku.toLowerCase().includes(q) || 
-        p.brand.toLowerCase().includes(q)
-      );
-    }
-    setFilteredProducts(result);
-  }, [searchQuery, activeCategory, products]);
+  const filteredProducts = products.filter((product) => {
+    if (activeCategory !== 'All' && product.category !== activeCategory) return false;
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase();
+    return (
+      product.name.toLowerCase().includes(q) ||
+      product.sku.toLowerCase().includes(q) ||
+      product.brand.toLowerCase().includes(q)
+    );
+  });
 
   const updateCart = (productId: string, delta: number) => {
     setCart(prev => {
@@ -218,7 +182,8 @@ const BuyerCatalog: React.FC = () => {
   const parsedCreditAmount = Number.parseFloat(creditAmount);
   const safeCreditAmount = Number.isFinite(parsedCreditAmount) ? parsedCreditAmount : 0;
   const creditPercentage = orderTotal > 0 ? Math.min(100, Math.max(0, (safeCreditAmount / orderTotal) * 100)) : 0;
-
+  const requiresUpfrontPayment = safeCreditAmount < orderTotal;
+  const requiredUpfrontAmount = Math.max(0, Number((orderTotal - safeCreditAmount).toFixed(2)));
   const applyCreditPercentage = (percentage: number) => {
     setSelectedCreditPercentage(percentage);
     setCreditAmount(((orderTotal * percentage) / 100).toFixed(2));
@@ -229,7 +194,42 @@ const BuyerCatalog: React.FC = () => {
     applyCreditPercentage(100);
     setCreditReason('');
     setCreditPaymentTerms('Net 15');
+    setCreditPaymentMethod('Bank Transfer');
+    setCreditPaymentReference('');
+    setCreditPaymentProof('');
+    setCreditPaymentNotes('');
+    if (creditPaymentFileRef.current) {
+      creditPaymentFileRef.current.value = '';
+    }
     setIsCreditModalOpen(true);
+  };
+
+  const handleCreditPaymentProofChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setCreditPaymentProof(String(reader.result || ''));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const clearServerDraft = async () => {
+    const response = await fetch('/api/orders/draft', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ items: [] })
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => null);
+      throw new Error(errorData?.error || 'Failed to clear draft order');
+    }
+
+    setDraftId(null);
+    draftHydratedRef.current = null;
   };
 
   const submitOrder = async (status: OrderStatus) => {
@@ -240,7 +240,8 @@ const BuyerCatalog: React.FC = () => {
       return null;
     }
 
-    const orderId = draftId || `ORD-${Date.now().toString().slice(-6)}`;
+    const isDraftSubmission = status === OrderStatus.DRAFT;
+    const orderId = `ORD-${Date.now().toString().slice(-6)}`;
     const statusValue = status === OrderStatus.DRAFT ? 'Draft' : 'Pending';
     const now = new Date();
 
@@ -268,22 +269,55 @@ const BuyerCatalog: React.FC = () => {
     };
 
     try {
-      const response = await fetch(draftId ? `/api/orders/${orderId}` : '/api/orders', {
-        method: draftId ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          ...newOrder,
-          status: statusValue
-        })
-      });
+      const response = isDraftSubmission
+        ? await fetch('/api/orders/draft', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ items: validItems })
+          })
+        : await fetch('/api/orders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              ...newOrder,
+              status: statusValue
+            })
+          });
 
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to submit order');
       }
 
-      return newOrder;
+      const responseData = await response.json().catch(() => null);
+
+      if (isDraftSubmission) {
+        const savedDraftId = responseData?.id || draftId;
+        if (savedDraftId) {
+          setDraftId(savedDraftId);
+        }
+        await queryClient.invalidateQueries({ queryKey: buyerQueryKeys.catalog(user?.id, draftParam) });
+
+        return {
+          ...newOrder,
+          id: savedDraftId || draftId || newOrder.id
+        };
+      }
+
+      if (draftId) {
+        await clearServerDraft();
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ['buyer-catalog'] });
+      await queryClient.invalidateQueries({ queryKey: ['buyer-orders'] });
+      await queryClient.invalidateQueries({ queryKey: ['buyer-dashboard'] });
+
+      return {
+        ...newOrder,
+        id: responseData?.id || newOrder.id
+      };
     } catch (err) {
       console.error('Order submission failed:', err);
       throw err;
@@ -292,30 +326,32 @@ const BuyerCatalog: React.FC = () => {
 
   const handleOrderAction = async (status: OrderStatus) => {
     try {
-      const newOrder = await submitOrder(status);
-      if (!newOrder) return;
-
-      setCart([]);
-      setIsCartOpen(false);
-      clearCart();
-      setDraftId(null);
-      setRequestCredit(false);
-
       if (status === OrderStatus.DRAFT) {
+        const newOrder = await submitOrder(status);
+        if (!newOrder) return;
         alert('Order saved as draft.');
-      } else {
-        alert(`Order #${newOrder.id} placed successfully!`);
+        return;
       }
 
-      navigate('/orders');
+      // Save latest cart as draft, then continue checkout on payment page.
+      const checkoutDraft = await submitOrder(OrderStatus.DRAFT);
+      if (!checkoutDraft?.id) {
+        throw new Error('Failed to prepare checkout draft');
+      }
+
+      setIsCartOpen(false);
+      setRequestCredit(false);
+      navigate(`/payment?draftId=${checkoutDraft.id}`);
     } catch (err) {
-      alert('Failed to submit order. Please try again.');
+      alert('Failed to continue to payment. Please try again.');
     }
   };
 
   const handleSubmitAndRequestCredit = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmedCreditReason = creditReason.trim();
+    const trimmedPaymentReference = creditPaymentReference.trim();
+    const trimmedPaymentNotes = creditPaymentNotes.trim();
 
     if (!safeCreditAmount || safeCreditAmount <= 0) {
       alert('Please enter a valid credit amount.');
@@ -332,41 +368,100 @@ const BuyerCatalog: React.FC = () => {
       return;
     }
 
+    if (requiresUpfrontPayment) {
+      if (!creditPaymentMethod.trim()) {
+        alert('Please choose a payment method for the upfront payment.');
+        return;
+      }
+      if (!trimmedPaymentReference && !creditPaymentProof) {
+        alert('Please provide a payment reference or upload proof for the upfront payment.');
+        return;
+      }
+      if (trimmedPaymentReference.length > 100) {
+        alert('Payment reference cannot exceed 100 characters.');
+        return;
+      }
+      if (trimmedPaymentNotes.length > 1000) {
+        alert('Payment note cannot exceed 1000 characters.');
+        return;
+      }
+    }
+
     setIsSubmittingOrder(true);
 
     try {
-      const newOrder = await submitOrder(OrderStatus.PENDING);
-      if (!newOrder) return;
+      const checkoutDraft = await submitOrder(OrderStatus.DRAFT);
+      if (!checkoutDraft?.id) {
+        throw new Error('Failed to prepare checkout draft');
+      }
 
-      const creditResponse = await fetch('/api/credits', {
+      const checkoutResponse = await fetch('/api/orders/checkout-with-credit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          orderId: newOrder.id,
-          amount: Number(safeCreditAmount.toFixed(2)),
-          reason: 'Order Financing',
-          notes: trimmedCreditReason
-            ? `${trimmedCreditReason} (${creditPercentage.toFixed(1)}% of order total requested)`
-            : `${creditPercentage.toFixed(1)}% of order total requested`,
-          paymentTerms: creditPaymentTerms
+          draftId: checkoutDraft.id,
+          creditRequest: {
+            amount: Number(safeCreditAmount.toFixed(2)),
+            reason: 'Order Financing',
+            notes: trimmedCreditReason
+              ? `${trimmedCreditReason} (${creditPercentage.toFixed(1)}% of order total requested)`
+              : `${creditPercentage.toFixed(1)}% of order total requested`,
+            paymentTerms: creditPaymentTerms
+          },
+          payment: requiresUpfrontPayment
+            ? {
+                amount: requiredUpfrontAmount,
+                method: creditPaymentMethod,
+                referenceId: trimmedPaymentReference || null,
+                proofImage: creditPaymentProof || null,
+                notes: trimmedPaymentNotes || null
+              }
+            : null
         })
       });
 
-      if (!creditResponse.ok) {
-        const errorData = await creditResponse.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Failed to submit credit request');
+      if (!checkoutResponse.ok) {
+        const errorData = await checkoutResponse.json().catch(() => ({}));
+        const errorMessage = String(errorData?.error || '');
+        const requestedPath = String(errorData?.requested || '');
+        if (checkoutResponse.status === 404 && errorMessage.toLowerCase().includes('route not found')) {
+          throw new Error(
+            `Backend route is missing for ${requestedPath || '/api/orders/checkout-with-credit'}. ` +
+            'Please restart the backend server so the latest routes are loaded.'
+          );
+        }
+        throw new Error(errorMessage || 'Failed to submit credit checkout');
       }
+
+      const checkoutData = await checkoutResponse.json().catch(() => null);
 
       setCart([]);
       setIsCartOpen(false);
       setIsCreditModalOpen(false);
       clearCart();
       setDraftId(null);
+      draftHydratedRef.current = null;
       setRequestCredit(false);
 
-      alert(`Order #${newOrder.id} placed and credit request submitted successfully.`);
-      navigate('/credit');
+      await queryClient.invalidateQueries({ queryKey: ['buyer-catalog'] });
+      await queryClient.invalidateQueries({ queryKey: ['buyer-orders'] });
+      await queryClient.invalidateQueries({ queryKey: ['buyer-dashboard'] });
+      await queryClient.invalidateQueries({ queryKey: ['buyer-credit-list'] });
+
+      if (requiresUpfrontPayment) {
+        alert('Order is under review. Credit request and upfront payment proof were submitted.');
+      } else {
+        alert('Order is under review. Credit request submitted successfully.');
+      }
+
+      if (checkoutData?.creditRequestId) {
+        navigate(`/credit/${checkoutData.creditRequestId}`);
+      } else if (checkoutData?.orderId) {
+        navigate(`/orders/${checkoutData.orderId}`);
+      } else {
+        navigate('/credit');
+      }
     } catch (err) {
       console.error('Submit and request credit failed:', err);
       alert(err instanceof Error ? err.message : 'Failed to submit order and credit request.');
@@ -382,6 +477,7 @@ const BuyerCatalog: React.FC = () => {
     const totalStock = p.stock.mainWarehouse + p.stock.backRoom + p.stock.showRoom;
     const isOutOfStock = totalStock === 0;
     const isLowStock = totalStock > 0 && totalStock < p.reorderPoint;
+    const isRecommended = Boolean(p.recommended);
 
     return (
         <div 
@@ -405,6 +501,12 @@ const BuyerCatalog: React.FC = () => {
           <div className="flex-1 flex flex-col justify-between min-w-0">
             <div className="space-y-0.5">
               <p className="text-[9px] font-black uppercase text-[#00A3C4] tracking-widest truncate">{p.brand}</p>
+              {isRecommended && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-[#E0F7FA] px-2 py-1 text-[9px] font-black uppercase tracking-[0.2em] text-[#008CA8] w-fit">
+                  <span className="material-symbols-outlined text-[11px]">stars</span>
+                  {t('buyer.recommended')}
+                </span>
+              )}
               <h3 className="font-bold text-slate-900 text-xs leading-tight line-clamp-2">{p.name}</h3>
               <p className="text-[10px] text-gray-400 font-medium">SKU: {p.sku}</p>
             </div>
@@ -446,6 +548,91 @@ const BuyerCatalog: React.FC = () => {
             </div>
           </div>
         </div>
+    );
+  };
+
+  const renderProductListRow = (p: Product) => {
+    const cartItem = cart.find(i => i.productId === p.id);
+    const isInCart = !!cartItem;
+    const qty = cartItem?.quantity || 0;
+    const totalStock = p.stock.mainWarehouse + p.stock.backRoom + p.stock.showRoom;
+    const isOutOfStock = totalStock === 0;
+    const isLowStock = totalStock > 0 && totalStock < p.reorderPoint;
+    const isRecommended = Boolean(p.recommended);
+    const stockLabel = isOutOfStock ? t('buyer.soldOut') : isLowStock ? t('buyer.lowStock') : t('buyer.inStock');
+    const stockClass = isOutOfStock
+      ? 'bg-red-50 text-red-600'
+      : isLowStock
+        ? 'bg-amber-50 text-amber-700'
+        : 'bg-emerald-50 text-emerald-700';
+
+    return (
+      <div
+        key={p.id}
+        onClick={() => navigate(`/catalog/${p.id}`)}
+        className="grid grid-cols-[minmax(0,1.8fr)_auto_auto] items-center gap-3 border-b border-slate-100 px-3 py-2.5 hover:bg-slate-50/80 transition-colors cursor-pointer"
+      >
+        <div className="min-w-0 flex items-center gap-3">
+          <div className="hidden sm:block size-12 rounded-xl overflow-hidden bg-slate-50 border border-slate-100 shrink-0">
+            <img src={p.image} alt={p.name} className="w-full h-full object-cover" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <h3 className="truncate text-sm font-bold text-slate-900">{p.name}</h3>
+              {isRecommended && (
+                <span className="hidden sm:inline-flex items-center gap-1 rounded-full bg-[#E0F7FA] px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.18em] text-[#008CA8] shrink-0">
+                  <span className="material-symbols-outlined text-[11px]">stars</span>
+                  {t('buyer.recommended')}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 text-[10px] font-medium text-slate-400 uppercase tracking-wider">
+              <span className="truncate">{p.brand}</span>
+              <span className="hidden sm:inline">SKU {p.sku}</span>
+              <span className={`inline-flex rounded-full px-2 py-0.5 text-[9px] font-black ${stockClass}`}>
+                {stockLabel}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="text-right shrink-0">
+          <p className="text-sm font-black text-slate-800">{p.price.toLocaleString()} <span className="text-[10px] text-slate-400">ETB</span></p>
+        </div>
+
+        <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
+          {!isInCart ? (
+            <button
+              onClick={() => updateCart(p.id, 1)}
+              disabled={isOutOfStock}
+              className="inline-flex h-8 items-center justify-center rounded-lg bg-[#00A3C4] px-3 text-[10px] font-black uppercase tracking-widest text-white transition-all active:scale-95 disabled:bg-slate-200"
+            >
+              Add
+            </button>
+          ) : (
+            <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+              <button onClick={() => updateCart(p.id, -1)} className="size-6 rounded-md bg-slate-50 text-slate-600 active:scale-90">
+                <span className="material-symbols-outlined text-xs">remove</span>
+              </button>
+              <input
+                type="number"
+                className="w-8 bg-transparent p-0 text-center text-xs font-black focus:ring-0 border-none"
+                value={qty === 0 ? '' : qty}
+                onClick={(e) => e.stopPropagation()}
+                onBlur={() => handleInputBlur(p.id)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  const intVal = parseInt(val);
+                  setQuantity(p.id, isNaN(intVal) ? 0 : intVal);
+                }}
+              />
+              <button onClick={() => updateCart(p.id, 1)} disabled={isOutOfStock} className="size-6 rounded-md bg-slate-50 text-[#00A3C4] active:scale-90 disabled:opacity-50">
+                <span className="material-symbols-outlined text-xs">add</span>
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
     );
   };
 
@@ -561,7 +748,7 @@ const BuyerCatalog: React.FC = () => {
               }}
               className="w-full py-3.5 bg-[#00A3C4] hover:bg-[#008CA8] text-white rounded-xl font-black text-xs uppercase tracking-widest shadow-lg shadow-[#00A3C4]/20 active:scale-95 transition-all flex items-center justify-center gap-2"
             >
-              {requestCredit ? 'Submit & Request Credit' : t('buyer.placeOrder')}
+              {requestCredit ? 'Submit & Request Credit' : 'Proceed to Payment'}
               <span className="material-symbols-outlined text-base">arrow_forward</span>
             </button>
             
@@ -583,7 +770,7 @@ const BuyerCatalog: React.FC = () => {
       <div className="flex-1 overflow-y-auto h-full flex flex-col">
         <div className="sticky top-0 bg-[#FAFAFA]/95 backdrop-blur-md z-20 py-4 px-4 lg:px-8 border-b border-gray-100">
           <div className="max-w-6xl mx-auto space-y-4">
-            <div className="flex gap-4">
+            <div className="flex items-center gap-4">
               <div className="relative flex-1">
                 <span className="absolute left-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-gray-400">search</span>
                 <input 
@@ -595,12 +782,15 @@ const BuyerCatalog: React.FC = () => {
                 />
               </div>
               <button 
-                onClick={() => setIsCartOpen(true)}
-                className="relative size-12 bg-white rounded-2xl border border-gray-200 flex items-center justify-center text-slate-600 shadow-sm"
+                onClick={() => setIsListView((current) => !current)}
+                className="flex h-12 items-center gap-2 rounded-2xl border border-gray-200 bg-white px-4 text-slate-600 shadow-sm transition-all hover:border-[#00A3C4]/30 hover:text-[#008CA8]"
               >
-                <span className="material-symbols-outlined">shopping_cart</span>
-                {cart.length > 0 && <span className="absolute -top-1 -right-1 size-4 bg-[#00A3C4] rounded-full border-2 border-white"></span>}
+                <span className="material-symbols-outlined">{isListView ? 'grid_view' : 'view_list'}</span>
+                <span className="hidden sm:inline text-[10px] font-black uppercase tracking-widest">
+                  {isListView ? 'Grid View' : 'List View'}
+                </span>
               </button>
+              <RefreshIndicator visible={isFetching && !isLoading} />
             </div>
 
             <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
@@ -635,35 +825,41 @@ const BuyerCatalog: React.FC = () => {
 
         <div className="max-w-6xl mx-auto px-4 lg:px-8 py-8 w-full pb-32 space-y-10">
           {error && (
-            <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-2xl font-semibold">
-              {error}
+            <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-red-700">
+              <p className="font-semibold">Failed to load catalog data.</p>
+              <p className="mt-1 text-sm">{error instanceof Error ? error.message : 'An unexpected error occurred.'}</p>
+              <button
+                onClick={() => queryClient.invalidateQueries({ queryKey: buyerQueryKeys.catalog(user?.id, draftParam) })}
+                className="mt-3 rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-red-700"
+              >
+                Retry
+              </button>
             </div>
           )}
           <section>
              <div className="flex items-center gap-2 mb-4">
-               <span className="material-symbols-outlined text-[#00A3C4]">stars</span>
-               <h3 className="text-lg font-black text-slate-900 uppercase tracking-tight">{t('buyer.recommended')}</h3>
-             </div>
-             {isLoading ? (
-               <LoadingState message="Loading catalog..." />
-             ) : (
-               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-6">
-                  {products.slice(0, 3).map(p => renderProductCard(p))}
-               </div>
-             )}
-          </section>
-
-          <section>
-             <div className="flex items-center gap-2 mb-4">
-               <span className="material-symbols-outlined text-slate-400">grid_view</span>
+               <span className="material-symbols-outlined text-slate-400">{isListView ? 'table_rows' : 'grid_view'}</span>
                <h3 className="text-lg font-black text-slate-900 uppercase tracking-tight">Catalog</h3>
              </div>
              {isLoading ? (
                <LoadingState message="Loading catalog..." />
              ) : (
-               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-6">
-                  {filteredProducts.map(p => renderProductCard(p))}
-               </div>
+               isListView ? (
+                 <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                   <div className="grid grid-cols-[minmax(0,1.8fr)_auto_auto] gap-3 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">
+                     <span>Product</span>
+                     <span>Price</span>
+                     <span>Qty</span>
+                   </div>
+                   <div>
+                     {filteredProducts.map(p => renderProductListRow(p))}
+                   </div>
+                 </div>
+               ) : (
+                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-6">
+                    {filteredProducts.map(p => renderProductCard(p))}
+                 </div>
+               )
              )}
              
              {!isLoading && filteredProducts.length === 0 && (
@@ -750,6 +946,10 @@ const BuyerCatalog: React.FC = () => {
                     <p className="text-xs text-slate-500 font-medium mt-1">{creditPercentage.toFixed(1)}% of order total</p>
                   </div>
                 </div>
+                <div className="mt-4 border-t border-slate-200 pt-4 flex items-center justify-between text-xs font-bold uppercase tracking-wider text-slate-500">
+                  <span>Upfront Payment</span>
+                  <span>ETB {requiredUpfrontAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                </div>
               </div>
 
               <div>
@@ -806,6 +1006,97 @@ const BuyerCatalog: React.FC = () => {
                   <span className="absolute right-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 pointer-events-none">expand_more</span>
                 </div>
               </div>
+
+              {requiresUpfrontPayment && (
+                <div className="rounded-3xl border border-amber-100 bg-amber-50/60 p-5 space-y-4">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-amber-600">Upfront Payment Required</p>
+                    <p className="mt-1 text-xs font-medium text-amber-700">
+                      Since this is a partial credit request, submit proof for the remaining ETB {requiredUpfrontAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Payment Method</label>
+                    <div className="relative mt-2">
+                      <select
+                        className="w-full appearance-none bg-white border border-slate-200 rounded-2xl p-4 pr-12 text-sm font-bold text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
+                        value={creditPaymentMethod}
+                        onChange={(e) => setCreditPaymentMethod(e.target.value)}
+                      >
+                        <option>Bank Transfer</option>
+                        <option>Mobile Money (CBE Birr/Telebirr)</option>
+                        <option>Check Deposit</option>
+                        <option>Cash Deposit</option>
+                      </select>
+                      <span className="absolute right-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 pointer-events-none">expand_more</span>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Payment Reference</label>
+                    <input
+                      value={creditPaymentReference}
+                      onChange={(e) => setCreditPaymentReference(e.target.value)}
+                      className="mt-2 w-full bg-white border border-slate-200 rounded-2xl p-4 text-sm font-medium text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
+                      placeholder="e.g. FT23098123"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Payment Proof</label>
+                      {creditPaymentProof && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCreditPaymentProof('');
+                            if (creditPaymentFileRef.current) {
+                              creditPaymentFileRef.current.value = '';
+                            }
+                          }}
+                          className="text-[10px] font-black uppercase tracking-widest text-red-500"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+
+                    <input
+                      ref={creditPaymentFileRef}
+                      type="file"
+                      accept="image/*"
+                      onChange={handleCreditPaymentProofChange}
+                      className="hidden"
+                    />
+
+                    {creditPaymentProof ? (
+                      <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white">
+                        <img src={creditPaymentProof} alt="Payment proof" className="h-48 w-full object-cover" />
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => creditPaymentFileRef.current?.click()}
+                        className="w-full rounded-2xl border-2 border-dashed border-slate-300 bg-white px-4 py-6 text-center text-xs font-bold text-slate-500 hover:border-[#00A3C4] hover:text-[#00A3C4] transition-all"
+                      >
+                        Upload payment proof (if no reference)
+                      </button>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Payment Note (Optional)</label>
+                    <textarea
+                      rows={2}
+                      value={creditPaymentNotes}
+                      onChange={(e) => setCreditPaymentNotes(e.target.value)}
+                      className="mt-2 w-full bg-white border border-slate-200 rounded-2xl p-4 text-sm font-medium text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
+                      placeholder="Add note for the upfront payment"
+                    />
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Notes (Optional)</label>

@@ -4,7 +4,21 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { OrderStatus, Order, Product } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 
-// Holt-Winters Additive (robust against sparse/zero-heavy demand)
+interface PredictionItem {
+  name: string;
+  growth: string;
+  badge: string;
+  isPositive: boolean;
+}
+
+type ForecastModel = 'holt-winters' | 'fb-prophet';
+
+const extractArray = <T,>(payload: any): T[] => {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.data)) return payload.data;
+  return [];
+};
+
 const holtWintersForecast = (
   data: number[],
   seasonLength: number,
@@ -18,14 +32,13 @@ const holtWintersForecast = (
   const clean = data.map((v) => (Number.isFinite(v) ? Math.max(0, v) : 0));
   const zeroRatio = clean.filter((v) => v === 0).length / clean.length;
 
-  // Fallback for very sparse series to avoid unstable seasonal extrapolation
   if (zeroRatio > 0.6) {
     const window = Math.min(6, clean.length);
     const recent = clean.slice(-window);
     const prev = clean.slice(-(window * 2), -window);
     const recentAvg = recent.reduce((a, b) => a + b, 0) / Math.max(1, recent.length);
     const prevAvg = prev.length > 0 ? prev.reduce((a, b) => a + b, 0) / prev.length : recentAvg;
-    const trend = (recentAvg - prevAvg) * 0.35; // damped
+    const trend = (recentAvg - prevAvg) * 0.35;
     const cap = Math.max(1, recentAvg * 3);
 
     return Array.from({ length: forecastLength }, (_, i) => {
@@ -43,15 +56,12 @@ const holtWintersForecast = (
   let trend = (avg2 - avg1) / seasonLength;
   const seasonals = new Array(clean.length).fill(0);
 
-  for (let i = 0; i < seasonLength; i++) {
-    seasonals[i] = clean[i] - avg1;
-  }
+  for (let i = 0; i < seasonLength; i++) seasonals[i] = clean[i] - avg1;
 
   for (let t = seasonLength; t < clean.length; t++) {
     const y = clean[t];
     const prevLevel = level;
     const prevSeason = seasonals[t - seasonLength] ?? 0;
-
     level = alpha * (y - prevSeason) + (1 - alpha) * (level + trend);
     trend = beta * (level - prevLevel) + (1 - beta) * trend;
     seasonals[t] = gamma * (y - level) + (1 - gamma) * prevSeason;
@@ -70,13 +80,6 @@ const holtWintersForecast = (
 
   return forecasts;
 };
-
-interface PredictionItem {
-  name: string;
-  growth: string;
-  badge: string;
-  isPositive: boolean;
-}
 
 // Helpers for Date Manipulation
 const getStartOfDay = (date: Date) => {
@@ -100,6 +103,119 @@ const getStartOfMonth = (date: Date) => {
     return d;
 };
 
+const getModelLabel = (model: ForecastModel) => (model === 'fb-prophet' ? 'FB Prophet' : 'Holt-Winters');
+
+const buildClientForecast = (orders: Order[], model: ForecastModel, productId?: string) => {
+  const scopedOrders = productId
+    ? orders.filter((o) => o.items.some((item) => item.productId === productId))
+    : orders;
+
+  if (scopedOrders.length === 0) {
+    return {
+      chartData: [{ name: 'No Data', hist: 0, fc: null }],
+      message: productId ? 'No order history found for this product.' : 'No sales data available.',
+      hasSufficientData: false,
+      timeResolution: 'Month' as const,
+      modelUsed: 'holt-winters' as const
+    };
+  }
+
+  const timestamps = scopedOrders.map((o) => new Date(o.date).getTime()).filter((t) => !isNaN(t));
+  if (timestamps.length === 0) {
+    return {
+      chartData: [{ name: 'No Data', hist: 0, fc: null }],
+      message: productId ? 'No valid date history found for this product.' : 'No sales data available.',
+      hasSufficientData: false,
+      timeResolution: 'Month' as const,
+      modelUsed: 'holt-winters' as const
+    };
+  }
+
+  const startDate = new Date(Math.min(...timestamps));
+  const endDate = new Date(Math.max(...timestamps));
+
+  const buildMode = (mode: 'daily' | 'weekly' | 'monthly') => {
+    const aggregated: Record<string, number> = {};
+    const getKey = (d: Date) => {
+      if (mode === 'daily') return d.toISOString().split('T')[0];
+      if (mode === 'weekly') return getStartOfWeek(d).toISOString().split('T')[0];
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    };
+
+    scopedOrders.forEach((order) => {
+      const dateObj = new Date(order.date);
+      if (isNaN(dateObj.getTime())) return;
+      const qty = productId
+        ? order.items.filter((item) => item.productId === productId).reduce((sum, item) => sum + item.quantity, 0)
+        : order.items.reduce((sum, item) => sum + item.quantity, 0);
+      aggregated[getKey(dateObj)] = (aggregated[getKey(dateObj)] || 0) + qty;
+    });
+
+    const timeline: Array<{ date: Date; units: number }> = [];
+    let current = mode === 'daily' ? getStartOfDay(startDate) : mode === 'weekly' ? getStartOfWeek(startDate) : getStartOfMonth(startDate);
+    let guard = 0;
+    while (current <= endDate && guard < 1000) {
+      const key = getKey(current);
+      timeline.push({ date: new Date(current), units: aggregated[key] || 0 });
+      if (mode === 'daily') current.setDate(current.getDate() + 1);
+      else if (mode === 'weekly') current.setDate(current.getDate() + 7);
+      else current.setMonth(current.getMonth() + 1);
+      guard++;
+    }
+
+    const seasonLength = mode === 'daily' ? 7 : mode === 'weekly' ? 4 : 12;
+    const forecastLength = mode === 'daily' ? 7 : mode === 'weekly' ? 8 : 6;
+    const timeResolution = mode === 'daily' ? 'Day' : mode === 'weekly' ? 'Week' : 'Month';
+    return { mode, seasonLength, forecastLength, timeResolution, timeline };
+  };
+
+  const candidates = [buildMode('daily'), buildMode('weekly'), buildMode('monthly')];
+  const candidate =
+    candidates.find((entry) => entry.timeline.length >= entry.seasonLength * 2) ||
+    [...candidates].reverse().find((entry) => entry.timeline.length > 0) ||
+    candidates[0];
+
+  const historyValues = candidate.timeline.map((point) => point.units);
+  const hasSufficientData = historyValues.length >= candidate.seasonLength * 2;
+  const forecastedValues = hasSufficientData
+    ? holtWintersForecast(historyValues, candidate.seasonLength, 0.3, 0.1, 0.1, candidate.forecastLength)
+    : [];
+
+  const formatLabel = (d: Date) => {
+    if (candidate.mode === 'daily') return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    if (candidate.mode === 'weekly') return d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' });
+    return d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+  };
+
+  const chartData: Array<{ name: string; hist: number | null; fc: number | null }> = candidate.timeline.map((point) => ({
+    name: formatLabel(point.date),
+    hist: point.units,
+    fc: null
+  }));
+
+  if (hasSufficientData && forecastedValues.length > 0 && candidate.timeline.length > 0) {
+    const lastDate = new Date(candidate.timeline[candidate.timeline.length - 1].date);
+    forecastedValues.forEach((value) => {
+      if (candidate.mode === 'daily') lastDate.setDate(lastDate.getDate() + 1);
+      else if (candidate.mode === 'weekly') lastDate.setDate(lastDate.getDate() + 7);
+      else lastDate.setMonth(lastDate.getMonth() + 1);
+      chartData.push({ name: formatLabel(lastDate), hist: null, fc: Math.round(value) });
+    });
+  }
+
+  return {
+    chartData: chartData.length > 0 ? chartData : [{ name: 'No Data', hist: 0, fc: null }],
+    message: hasSufficientData
+      ? model === 'fb-prophet'
+        ? `FB Prophet is unavailable in the browser fallback. Falling back to Holt-Winters for this ${candidate.timeResolution.toLowerCase()} forecast.`
+        : `Projecting demand by ${candidate.timeResolution} (Holt-Winters)`
+      : `Data accumulation in progress. Need ${candidate.seasonLength * 2} ${candidate.timeResolution.toLowerCase()}s (Have ${historyValues.length}).`,
+    hasSufficientData,
+    timeResolution: candidate.timeResolution as 'Day' | 'Week' | 'Month',
+    modelUsed: 'holt-winters' as const
+  };
+};
+
 const Analytics: React.FC = () => {
   const { t } = useLanguage();
   
@@ -110,19 +226,25 @@ const Analytics: React.FC = () => {
   const [totalRevenue, setTotalRevenue] = useState(0);
   const [inventoryTurnover, setInventoryTurnover] = useState(0);
   const [inventoryTurnoverTrend, setInventoryTurnoverTrend] = useState<{name: string, val: number}[]>([]);
-  const [deliveredOrders, setDeliveredOrders] = useState<Order[]>([]);
   const [analyticsProducts, setAnalyticsProducts] = useState<Product[]>([]);
+  const [analyticsOrders, setAnalyticsOrders] = useState<Order[]>([]);
   
   // Forecasting State
   const [forecastChartData, setForecastChartData] = useState<any[]>([]);
   const [forecastMessage, setForecastMessage] = useState('');
   const [hasSufficientData, setHasSufficientData] = useState(false);
   const [timeResolution, setTimeResolution] = useState<'Day' | 'Week' | 'Month'>('Month');
+  const [forecastModel, setForecastModel] = useState<ForecastModel>('holt-winters');
+  const [forecastModelUsed, setForecastModelUsed] = useState<ForecastModel>('holt-winters');
+  const [forecastRefreshToken, setForecastRefreshToken] = useState(0);
+  const [isGeneratingForecasts, setIsGeneratingForecasts] = useState(false);
+  const [forecastGenerationMessage, setForecastGenerationMessage] = useState('');
   const [selectedForecastProductId, setSelectedForecastProductId] = useState('');
   const [productForecastChartData, setProductForecastChartData] = useState<any[]>([]);
   const [productForecastMessage, setProductForecastMessage] = useState('');
   const [hasSufficientProductData, setHasSufficientProductData] = useState(false);
   const [productTimeResolution, setProductTimeResolution] = useState<'Day' | 'Week' | 'Month'>('Month');
+  const [productForecastModelUsed, setProductForecastModelUsed] = useState<ForecastModel>('holt-winters');
 
   // Custom File Upload State
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -138,6 +260,8 @@ const Analytics: React.FC = () => {
     if (typeof value !== 'string') return OrderStatus.PENDING;
     const map: Record<string, OrderStatus> = {
       DRAFT: OrderStatus.DRAFT,
+      ON_REVIEW: OrderStatus.ON_REVIEW,
+      'ON REVIEW': OrderStatus.ON_REVIEW,
       PENDING: OrderStatus.PENDING,
       PROCESSING: OrderStatus.PROCESSING,
       SHIPPED: OrderStatus.SHIPPED,
@@ -147,6 +271,7 @@ const Analytics: React.FC = () => {
       CANCELED: OrderStatus.CANCELLED,
       DELETED: OrderStatus.DELETED,
       Draft: OrderStatus.DRAFT,
+      'On Review': OrderStatus.ON_REVIEW,
       Pending: OrderStatus.PENDING,
       Processing: OrderStatus.PROCESSING,
       Shipped: OrderStatus.SHIPPED,
@@ -159,25 +284,61 @@ const Analytics: React.FC = () => {
     return map[value] || OrderStatus.PENDING;
   };
 
+  const handleGenerateForecasts = async () => {
+    setIsGeneratingForecasts(true);
+    setForecastGenerationMessage('Generating and storing Holt-Winters and FB Prophet forecasts...');
+
+    try {
+      const response = await fetch('/api/orders/metrics/demand-forecast/generate', {
+        method: 'POST',
+        credentials: 'include'
+      });
+
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(payload?.error || 'Failed to generate forecasts');
+      }
+
+      const modelsCount = Array.isArray(payload?.models) ? payload.models.length : 2;
+      const productCount = Number(payload?.productCount || 0);
+      setForecastGenerationMessage(
+        `Stored refreshed forecasts for ${modelsCount} models across ${productCount} products.`
+      );
+      setForecastRefreshToken((value) => value + 1);
+    } catch (err) {
+      console.error('Generate forecasts error:', err);
+      setForecastGenerationMessage(
+        err instanceof Error ? err.message : 'Failed to generate forecasts'
+      );
+    } finally {
+      setIsGeneratingForecasts(false);
+    }
+  };
+
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [ordersRes, productsRes, turnoverRes] = await Promise.all([
+        const [ordersResult, productsResult, turnoverResult, forecastResult] = await Promise.allSettled([
           fetch('/api/orders', { credentials: 'include' }),
           fetch('/api/products', { credentials: 'include' }),
-          fetch('/api/orders/metrics/inventory-turnover', { credentials: 'include' })
+          fetch('/api/orders/metrics/inventory-turnover', { credentials: 'include' }),
+          fetch(`/api/orders/metrics/demand-forecast?model=${encodeURIComponent(forecastModel)}`, { credentials: 'include' })
         ]);
 
-        if (!ordersRes.ok) throw new Error('Failed to fetch orders');
-        if (!productsRes.ok) throw new Error('Failed to fetch products');
+        if (ordersResult.status !== 'fulfilled' || !ordersResult.value.ok) throw new Error('Failed to fetch orders');
+        if (productsResult.status !== 'fulfilled' || !productsResult.value.ok) throw new Error('Failed to fetch products');
 
-        const [ordersData, productsData]: [Order[], Product[]] = await Promise.all([
-          ordersRes.json(),
-          productsRes.json()
-        ]);
+        const ordersPayload = await ordersResult.value.json();
+        const productsPayload = await productsResult.value.json();
+        const ordersData = extractArray<Order>(ordersPayload);
+        const productsData = extractArray<Product>(productsPayload);
+        const forecastData =
+          forecastResult.status === 'fulfilled' && forecastResult.value.ok
+            ? await forecastResult.value.json()
+            : null;
 
-        if (turnoverRes.ok) {
-          const turnoverData = await turnoverRes.json();
+        if (turnoverResult.status === 'fulfilled' && turnoverResult.value.ok) {
+          const turnoverData = await turnoverResult.value.json();
           setInventoryTurnover(Number(turnoverData.turnover || 0));
           setInventoryTurnoverTrend(
             Array.isArray(turnoverData.trend) && turnoverData.trend.length > 0
@@ -191,20 +352,26 @@ const Analytics: React.FC = () => {
 
         const allOrders = ordersData
           .map(o => ({ ...o, status: normalizeStatus(o.status) }))
-          .filter(o => o.status === OrderStatus.DELIVERED);
+          .filter(o => ![OrderStatus.DRAFT, OrderStatus.CANCELLED, OrderStatus.DELETED].includes(o.status));
+        setAnalyticsOrders(allOrders);
 
         const allProducts = productsData;
-        setDeliveredOrders(allOrders);
         setAnalyticsProducts(allProducts);
         if (!selectedForecastProductId && allProducts.length > 0) {
           setSelectedForecastProductId(allProducts[0].id);
         }
 
+        const fallbackForecast = buildClientForecast(allOrders, forecastModel);
+        const resolvedForecast = forecastData && Array.isArray(forecastData?.chartData) ? forecastData : fallbackForecast;
+        setForecastMessage(resolvedForecast?.message || t('analytics.noData'));
+        setForecastChartData(Array.isArray(resolvedForecast?.chartData) ? resolvedForecast.chartData : [{ name: 'No Data', hist: 0, fc: null }]);
+        setHasSufficientData(Boolean(resolvedForecast?.hasSufficientData));
+        setTimeResolution((resolvedForecast?.timeResolution as 'Day' | 'Week' | 'Month') || 'Month');
+        setForecastModelUsed((resolvedForecast?.modelUsed as ForecastModel) || 'holt-winters');
+
         if (allOrders.length === 0) {
-            setForecastMessage(t('analytics.noData'));
             // Initialize empty state
             setGrowthTrend([{name: 'No Data', val: 0}]);
-            setForecastChartData([{ name: 'No Data', hist: 0, fc: null }]);
             setPredictions([
                 { name: 'Data Pending', growth: '--', badge: 'Waiting...', isPositive: true },
                 { name: 'Data Pending', growth: '--', badge: 'Waiting...', isPositive: true },
@@ -314,82 +481,6 @@ const Analytics: React.FC = () => {
         loopGuard++;
     }
 
-    // 4. Configure Forecast Parameters
-    let seasonLength = 12; 
-    let forecastLength = 6;
-    let resolutionLabel: 'Day' | 'Week' | 'Month' = 'Month';
-
-    if (mode === 'daily') {
-        seasonLength = 7; // Weekly seasonality
-        forecastLength = 7; // Forecast next week
-        resolutionLabel = 'Day';
-    } else if (mode === 'weekly') {
-        seasonLength = 4; // Monthly seasonality (approx 4 weeks)
-        forecastLength = 8; // Forecast next 2 months
-        resolutionLabel = 'Week';
-    }
-
-    setTimeResolution(resolutionLabel);
-
-    // 5. Run Forecasting
-    const historyValues = timelineData.map(d => d.units);
-    const isSufficient = historyValues.length >= seasonLength * 2;
-    setHasSufficientData(isSufficient);
-
-    if (!isSufficient) {
-        setForecastMessage(`Data accumulation in progress. Need ${seasonLength * 2} ${resolutionLabel.toLowerCase()}s (Have ${historyValues.length}).`);
-    } else {
-        setForecastMessage(`Projecting demand by ${resolutionLabel} (Holt-Winters)`);
-    }
-
-    let forecastedValues: number[] = [];
-    if (isSufficient) {
-        // Tuned parameters for general retail
-        forecastedValues = holtWintersForecast(historyValues, seasonLength, 0.3, 0.1, 0.1, forecastLength);
-    }
-
-    // 6. Build Chart Payload
-    const chartData = [];
-    const formatLabel = (d: Date) => {
-        if (mode === 'daily') return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-        if (mode === 'weekly') {
-            // For weekly, show "M/D"
-            return d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' });
-        }
-        return d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
-    };
-
-    // Add History
-    timelineData.forEach(pt => {
-        chartData.push({
-            name: formatLabel(pt.date),
-            hist: pt.units,
-            fc: null as number | null
-        });
-    });
-
-    // Add Forecast
-    if (isSufficient && forecastedValues.length > 0) {
-        // Start from next interval
-        const lastDate = new Date(timelineData[timelineData.length - 1].date);
-        
-        for (let i = 0; i < forecastedValues.length; i++) {
-            if (mode === 'daily') lastDate.setDate(lastDate.getDate() + 1);
-            else if (mode === 'weekly') lastDate.setDate(lastDate.getDate() + 7);
-            else lastDate.setMonth(lastDate.getMonth() + 1);
-
-            chartData.push({
-                name: formatLabel(lastDate),
-                hist: null,
-                fc: Math.round(forecastedValues[i])
-            });
-        }
-    } else if (chartData.length === 0) {
-        chartData.push({ name: 'No Data', hist: 0, fc: null });
-    }
-
-    setForecastChartData(chartData);
-
     // --- Growth Sparkline (Aligned with timeline) ---
     setGrowthTrend(timelineData.map(d => ({ name: d.key, val: d.revenue })));
 
@@ -459,7 +550,7 @@ const Analytics: React.FC = () => {
     };
 
     fetchData();
-  }, [t]);
+  }, [forecastModel, forecastRefreshToken, t]);
 
   useEffect(() => {
     if (!selectedForecastProductId) {
@@ -467,139 +558,34 @@ const Analytics: React.FC = () => {
       setProductTimeResolution('Month');
       setProductForecastMessage('Select a product to forecast demand.');
       setProductForecastChartData([{ name: 'No Data', hist: 0, fc: null }]);
+      setProductForecastModelUsed('holt-winters');
       return;
     }
-
-    const productOrders = deliveredOrders.filter((o) =>
-      o.items.some((item) => item.productId === selectedForecastProductId)
-    );
-
-    if (productOrders.length === 0) {
-      setHasSufficientProductData(false);
-      setProductTimeResolution('Month');
-      setProductForecastMessage('No delivered order history found for this product.');
-      setProductForecastChartData([{ name: 'No Data', hist: 0, fc: null }]);
-      return;
-    }
-
-    const timestamps = productOrders.map((o) => new Date(o.date).getTime()).filter((ts) => !isNaN(ts));
-    if (timestamps.length === 0) {
-      setHasSufficientProductData(false);
-      setProductTimeResolution('Month');
-      setProductForecastMessage('No valid date history found for this product.');
-      setProductForecastChartData([{ name: 'No Data', hist: 0, fc: null }]);
-      return;
-    }
-
-    const minTime = Math.min(...timestamps);
-    const maxTime = Math.max(...timestamps);
-    const daySpan = (maxTime - minTime) / (1000 * 3600 * 24);
-
-    let mode: 'daily' | 'weekly' | 'monthly' = 'monthly';
-    if (daySpan <= 60) mode = 'daily';
-    else if (daySpan <= 730) mode = 'weekly';
-    else mode = 'monthly';
-
-    const aggregatedUnits: Record<string, number> = {};
-    const getKey = (d: Date) => {
-      if (mode === 'daily') return d.toISOString().split('T')[0];
-      if (mode === 'weekly') return getStartOfWeek(d).toISOString().split('T')[0];
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    };
-
-    productOrders.forEach((o) => {
-      const dateObj = new Date(o.date);
-      if (isNaN(dateObj.getTime())) return;
-      const key = getKey(dateObj);
-      const qty = o.items
-        .filter((item) => item.productId === selectedForecastProductId)
-        .reduce((sum, item) => sum + item.quantity, 0);
-      aggregatedUnits[key] = (aggregatedUnits[key] || 0) + qty;
-    });
-
-    const timelineData: { date: Date; key: string; units: number }[] = [];
-    const startDate = new Date(minTime);
-    const endDate = new Date(maxTime);
-    let current = mode === 'daily'
-      ? getStartOfDay(startDate)
-      : mode === 'weekly'
-        ? getStartOfWeek(startDate)
-        : getStartOfMonth(startDate);
-
-    let loopGuard = 0;
-    while (current <= endDate && loopGuard < 1000) {
-      const key = getKey(current);
-      timelineData.push({
-        date: new Date(current),
-        key,
-        units: aggregatedUnits[key] || 0
-      });
-      if (mode === 'daily') current.setDate(current.getDate() + 1);
-      else if (mode === 'weekly') current.setDate(current.getDate() + 7);
-      else current.setMonth(current.getMonth() + 1);
-      loopGuard++;
-    }
-
-    let seasonLength = 12;
-    let forecastLength = 6;
-    let resolutionLabel: 'Day' | 'Week' | 'Month' = 'Month';
-    if (mode === 'daily') {
-      seasonLength = 7;
-      forecastLength = 7;
-      resolutionLabel = 'Day';
-    } else if (mode === 'weekly') {
-      seasonLength = 4;
-      forecastLength = 8;
-      resolutionLabel = 'Week';
-    }
-    setProductTimeResolution(resolutionLabel);
-
-    const historyValues = timelineData.map((d) => d.units);
-    const isSufficient = historyValues.length >= seasonLength * 2;
-    setHasSufficientProductData(isSufficient);
-    if (!isSufficient) {
-      setProductForecastMessage(
-        `Data accumulation in progress. Need ${seasonLength * 2} ${resolutionLabel.toLowerCase()}s (Have ${historyValues.length}).`
-      );
-    } else {
-      setProductForecastMessage(`Projecting demand by ${resolutionLabel} (Holt-Winters)`);
-    }
-
-    let forecastedValues: number[] = [];
-    if (isSufficient) {
-      forecastedValues = holtWintersForecast(historyValues, seasonLength, 0.3, 0.1, 0.1, forecastLength);
-    }
-
-    const formatLabel = (d: Date) => {
-      if (mode === 'daily') return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      if (mode === 'weekly') return d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' });
-      return d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
-    };
-
-    const chartData: { name: string; hist: number | null; fc: number | null }[] = timelineData.map((pt) => ({
-      name: formatLabel(pt.date),
-      hist: pt.units,
-      fc: null
-    }));
-
-    if (isSufficient && forecastedValues.length > 0) {
-      const lastDate = new Date(timelineData[timelineData.length - 1].date);
-      for (let i = 0; i < forecastedValues.length; i++) {
-        if (mode === 'daily') lastDate.setDate(lastDate.getDate() + 1);
-        else if (mode === 'weekly') lastDate.setDate(lastDate.getDate() + 7);
-        else lastDate.setMonth(lastDate.getMonth() + 1);
-        chartData.push({
-          name: formatLabel(lastDate),
-          hist: null,
-          fc: Math.round(forecastedValues[i])
+    const loadProductForecast = async () => {
+      try {
+        const response = await fetch(`/api/orders/metrics/demand-forecast?productId=${encodeURIComponent(selectedForecastProductId)}&model=${encodeURIComponent(forecastModel)}`, {
+          credentials: 'include'
         });
+        if (!response.ok) throw new Error('Failed to fetch product forecast');
+        const data = await response.json();
+        setHasSufficientProductData(Boolean(data?.hasSufficientData));
+        setProductTimeResolution((data?.timeResolution as 'Day' | 'Week' | 'Month') || 'Month');
+        setProductForecastMessage(data?.message || 'No order history found for this product.');
+        setProductForecastChartData(Array.isArray(data?.chartData) ? data.chartData : [{ name: 'No Data', hist: 0, fc: null }]);
+        setProductForecastModelUsed((data?.modelUsed as ForecastModel) || 'holt-winters');
+      } catch (err) {
+        console.error('Product forecast fetch error:', err);
+        const fallback = buildClientForecast(analyticsOrders, forecastModel, selectedForecastProductId);
+        setHasSufficientProductData(Boolean(fallback.hasSufficientData));
+        setProductTimeResolution(fallback.timeResolution);
+        setProductForecastMessage(fallback.message);
+        setProductForecastChartData(fallback.chartData);
+        setProductForecastModelUsed(fallback.modelUsed);
       }
-    } else if (chartData.length === 0) {
-      chartData.push({ name: 'No Data', hist: 0, fc: null });
-    }
+    };
 
-    setProductForecastChartData(chartData);
-  }, [deliveredOrders, selectedForecastProductId]);
+    loadProductForecast();
+  }, [analyticsOrders, forecastModel, selectedForecastProductId, forecastRefreshToken]);
 
   const handleExport = () => {
     const csvRows = [];
@@ -901,6 +887,56 @@ const Analytics: React.FC = () => {
         </div>
       </div>
 
+      <section className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5 md:p-6">
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">Forecast Model</p>
+            <h2 className="mt-1 text-lg font-extrabold text-slate-800">Choose Forecast Engine</h2>
+            <p className="text-sm font-medium text-gray-500">
+              Forecasting runs on the server. If FB Prophet is unavailable there, the report falls back to Holt-Winters automatically.
+            </p>
+          </div>
+          <div className="flex flex-col items-start gap-3 md:items-end">
+            <div className="inline-flex rounded-2xl bg-slate-100 p-1.5">
+              {[
+                { id: 'holt-winters' as const, label: 'Holt-Winters' },
+                { id: 'fb-prophet' as const, label: 'FB Prophet' }
+              ].map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => setForecastModel(option.id)}
+                  className={`rounded-2xl px-4 py-2.5 text-xs font-black uppercase tracking-widest transition-all ${
+                    forecastModel === option.id
+                      ? 'bg-white text-slate-900 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={handleGenerateForecasts}
+              disabled={isGeneratingForecasts}
+              className={`rounded-2xl px-4 py-2.5 text-xs font-black uppercase tracking-widest transition-all ${
+                isGeneratingForecasts
+                  ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+                  : 'bg-slate-900 text-white shadow-sm hover:bg-slate-800'
+              }`}
+            >
+              {isGeneratingForecasts ? 'Generating...' : 'Generate Forecasts'}
+            </button>
+            {forecastGenerationMessage && (
+              <p className="max-w-sm text-right text-xs font-semibold text-gray-500">
+                {forecastGenerationMessage}
+              </p>
+            )}
+          </div>
+        </div>
+      </section>
+
       {/* Main Forecast Card */}
       <section className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
         <div className="p-6 border-b border-gray-50 flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -909,9 +945,19 @@ const Analytics: React.FC = () => {
               <span className="material-symbols-outlined">auto_awesome</span>
             </div>
             <div>
-              <h2 className="text-xl font-extrabold text-slate-800">{t('analytics.demandForecast')} ({timeResolution})</h2>
+              <h2 className="text-xl font-extrabold text-slate-800">
+                {t('analytics.demandForecast')} ({timeResolution}) - {getModelLabel(forecastModelUsed)}
+              </h2>
+              <p className="text-sm text-gray-400 font-medium">{forecastMessage}</p>
+            </div>
+            <div className="hidden">
+              <h2 className="text-xl font-extrabold text-slate-800">
+                {t('analytics.demandForecast')} ({timeResolution}) {forecastModel === 'fb-prophet' ? '• FB Prophet' : '• Holt-Winters'}
+              </h2>
               <p className="text-sm text-gray-400 font-medium">
-                {forecastMessage}
+                {forecastModel === 'fb-prophet'
+                  ? 'FB Prophet toggle is ready. Current forecast output is still driven by Holt-Winters until Prophet is implemented.'
+                  : forecastMessage}
               </p>
             </div>
           </div>
@@ -987,8 +1033,20 @@ const Analytics: React.FC = () => {
               <span className="material-symbols-outlined">inventory_2</span>
             </div>
             <div>
-              <h2 className="text-xl font-extrabold text-slate-800">Product Demand Forecast ({productTimeResolution})</h2>
+              <h2 className="text-xl font-extrabold text-slate-800">
+                Product Demand Forecast ({productTimeResolution}) - {getModelLabel(productForecastModelUsed)}
+              </h2>
               <p className="text-sm text-gray-400 font-medium">{productForecastMessage}</p>
+            </div>
+            <div className="hidden">
+              <h2 className="text-xl font-extrabold text-slate-800">
+                Product Demand Forecast ({productTimeResolution}) {forecastModel === 'fb-prophet' ? '• FB Prophet' : '• Holt-Winters'}
+              </h2>
+              <p className="text-sm text-gray-400 font-medium">
+                {forecastModel === 'fb-prophet'
+                  ? 'FB Prophet toggle is ready. Product forecast output still uses Holt-Winters until Prophet is implemented.'
+                  : productForecastMessage}
+              </p>
             </div>
           </div>
           <div className="flex flex-col gap-2 min-w-[260px]">

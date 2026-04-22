@@ -149,21 +149,6 @@ const Buyers: React.FC = () => {
 
               {/* Desktop-only Details */}
               <div className="hidden lg:block space-y-4">
-                <div className="p-3 bg-gray-50 rounded-2xl border border-gray-100">
-                  <div className="flex justify-between text-[9px] font-black text-gray-400 uppercase tracking-widest mb-1.5">
-                    <span>{t('buyers.creditUsage')}</span>
-                    <span className="text-slate-700">
-                      {buyer.creditLimit > 0 ? Math.round((buyer.availableCredit / buyer.creditLimit) * 100) : 0}%
-                    </span>
-                  </div>
-                  <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-primary transition-all duration-700" 
-                      style={{ width: `${buyer.creditLimit > 0 ? (buyer.availableCredit / buyer.creditLimit) * 100 : 0}%` }}
-                    ></div>
-                  </div>
-                </div>
-
                 <div className="grid grid-cols-2 gap-2 text-center">
                   <div className="p-2 border border-gray-50 rounded-xl bg-white/50">
                     <p className="text-[8px] font-black text-gray-400 uppercase mb-0.5">{t('nav.orders')}</p>

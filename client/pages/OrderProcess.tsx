@@ -7,6 +7,8 @@ const normalizeStatus = (value: any): OrderStatus => {
   if (typeof value !== 'string') return OrderStatus.PENDING;
   const map: Record<string, OrderStatus> = {
     DRAFT: OrderStatus.DRAFT,
+    ON_REVIEW: OrderStatus.ON_REVIEW,
+    'ON REVIEW': OrderStatus.ON_REVIEW,
     PENDING: OrderStatus.PENDING,
     PROCESSING: OrderStatus.PROCESSING,
     SHIPPED: OrderStatus.SHIPPED,
@@ -15,6 +17,7 @@ const normalizeStatus = (value: any): OrderStatus => {
     CANCELLED: OrderStatus.CANCELLED,
     DELETED: OrderStatus.DELETED,
     Draft: OrderStatus.DRAFT,
+    'On Review': OrderStatus.ON_REVIEW,
     Pending: OrderStatus.PENDING,
     Processing: OrderStatus.PROCESSING,
     Shipped: OrderStatus.SHIPPED,

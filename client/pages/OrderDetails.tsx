@@ -4,6 +4,7 @@ import { Order, Product, OrderStatus, Buyer } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { printInvoice } from '../utils/printInvoice';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
 
 
 
@@ -11,6 +12,8 @@ const normalizeStatus = (value: any): OrderStatus => {
   if (typeof value !== 'string') return OrderStatus.PENDING;
   const map: Record<string, OrderStatus> = {
     DRAFT: OrderStatus.DRAFT,
+    ON_REVIEW: OrderStatus.ON_REVIEW,
+    'ON REVIEW': OrderStatus.ON_REVIEW,
     PENDING: OrderStatus.PENDING,
     PROCESSING: OrderStatus.PROCESSING,
     SHIPPED: OrderStatus.SHIPPED,
@@ -19,6 +22,7 @@ const normalizeStatus = (value: any): OrderStatus => {
     CANCELLED: OrderStatus.CANCELLED,
     DELETED: OrderStatus.DELETED,
     Draft: OrderStatus.DRAFT,
+    'On Review': OrderStatus.ON_REVIEW,
     Pending: OrderStatus.PENDING,
     Processing: OrderStatus.PROCESSING,
     Shipped: OrderStatus.SHIPPED,
@@ -40,12 +44,14 @@ const OrderDetails: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [buyer, setBuyer] = useState<Buyer | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshToken, setRefreshToken] = useState(0);
   
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isUndeliveredModalOpen, setIsUndeliveredModalOpen] = useState(false);
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
   const [isDeliveredModalOpen, setIsDeliveredModalOpen] = useState(false);
   const [reasonText, setReasonText] = useState('');
+  const [reviewPaymentId, setReviewPaymentId] = useState<string | null>(null);
 useEffect(() => {
   const fetchOrderDetails = async () => {
     if (!id) {
@@ -93,7 +99,51 @@ useEffect(() => {
   };
 
   fetchOrderDetails();
-}, [id, navigate, canViewBuyers]);
+}, [id, navigate, canViewBuyers, refreshToken]);
+
+useEffect(() => {
+  if (!id || !order || order.status !== OrderStatus.ON_REVIEW) {
+    setReviewPaymentId(null);
+    return;
+  }
+
+  let isMounted = true;
+  const loadOrderPayment = async () => {
+    try {
+      const response = await fetch(`/api/payments?orderId=${encodeURIComponent(id)}`, { credentials: 'include' });
+      if (!response.ok) return;
+      const data = await response.json();
+      const payments = Array.isArray(data) ? data : [];
+      const pending = payments.find((payment: any) => payment.status === 'Pending Review');
+      const target = pending || payments[0];
+      if (isMounted) {
+        setReviewPaymentId(target?.id || null);
+      }
+    } catch (err) {
+      console.error('Failed to load order payment:', err);
+    }
+  };
+
+  void loadOrderPayment();
+  return () => {
+    isMounted = false;
+  };
+}, [id, order, refreshToken]);
+
+  useRealtimeEvent<{ orderId?: string }>('realtime:orders', (detail) => {
+    if (!id || detail?.orderId !== id) return;
+    setRefreshToken((value) => value + 1);
+  });
+
+  useRealtimeEvent<{ orderId?: string }>('realtime:payments', (detail) => {
+    if (!id || detail?.orderId !== id) return;
+    setRefreshToken((value) => value + 1);
+  });
+
+  useRealtimeEvent<{ orderId?: string }>('realtime:credits', (detail) => {
+    if (!id || detail?.orderId !== id) return;
+    setRefreshToken((value) => value + 1);
+  });
   if (loading) {
     return (
       <div className="p-8 text-center">
@@ -106,6 +156,7 @@ useEffect(() => {
   if (!order) return <div className="p-8 text-center text-gray-400 font-bold">Order not found.</div>;
 
   const isPending = order.status === OrderStatus.PENDING;
+  const isOnReview = order.status === OrderStatus.ON_REVIEW;
   const isProcessing = order.status === OrderStatus.PROCESSING;
   const isShipped = order.status === OrderStatus.SHIPPED;
   const isDelivered = order.status === OrderStatus.DELIVERED;
@@ -186,6 +237,7 @@ useEffect(() => {
     if (isDelivered) return 'bg-emerald-500';
     if (isShipped) return 'bg-purple-500';
     if (isProcessing) return 'bg-blue-500';
+    if (isOnReview) return 'bg-cyan-500';
     if (isUndelivered) return 'bg-red-500';
     if (isCancelled) return 'bg-slate-400';
     if (isDeleted) return 'bg-red-600';
@@ -196,6 +248,7 @@ useEffect(() => {
     if (isDelivered) return 'bg-emerald-50 text-emerald-700';
     if (isShipped) return 'bg-purple-50 text-purple-700';
     if (isProcessing) return 'bg-blue-50 text-blue-700';
+    if (isOnReview) return 'bg-cyan-50 text-cyan-700';
     if (isUndelivered) return 'bg-red-50 text-red-700';
     if (isCancelled) return 'bg-slate-50 text-slate-400';
     if (isDeleted) return 'bg-red-50 text-red-600';
@@ -209,6 +262,7 @@ useEffect(() => {
         <div className="flex items-center gap-3">
           <div className={`w-2.5 h-2.5 rounded-full ${getStatusBannerColor()} animate-pulse`}></div>
           <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">{t('order.lifecycle')}</span>
+          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">#{order.id}</span>
         </div>
         <div className={`
           px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wider
@@ -577,6 +631,16 @@ useEffect(() => {
               </button>
             )}
           </div>
+
+          {isOnReview && !isCancelled && !isDeleted && (
+            <Link
+              to={reviewPaymentId ? `/payments/${reviewPaymentId}` : '/payments'}
+              className="w-full h-14 bg-cyan-600 text-white rounded-2xl flex items-center justify-center gap-2 font-black text-sm shadow-xl shadow-cyan-600/20 active:scale-95 transition-all"
+            >
+              <span className="material-symbols-outlined">verified</span>
+              {t('order.verify')}
+            </Link>
+          )}
 
           {(isPending || isProcessing) && !isCancelled && !isDeleted && (
             <Link 

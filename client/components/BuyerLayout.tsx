@@ -6,6 +6,7 @@ import { getCart } from '../services/cartStore';
 import { getCartCount } from '../services/cartStore';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
 
 interface BuyerLayoutProps {
   children: React.ReactNode;
@@ -48,8 +49,6 @@ const BuyerLayout: React.FC<BuyerLayoutProps> = ({ children, onLogout }) => {
       email: me?.email || '',
       phone: me?.phone || '',
       address: '',
-      creditLimit: 0,
-      availableCredit: 0,
       outstandingBalance: 0,
       paymentTerms: '',
       totalSpend: 0,
@@ -122,6 +121,10 @@ const BuyerLayout: React.FC<BuyerLayoutProps> = ({ children, onLogout }) => {
     }
   };
 
+  useRealtimeEvent('realtime:notifications', () => {
+    void updateNotifCount();
+  });
+
   const handleCartClick = () => {
     navigate('/catalog?openCart=true');
   };
@@ -130,6 +133,7 @@ const BuyerLayout: React.FC<BuyerLayoutProps> = ({ children, onLogout }) => {
     { label: t('nav.dashboard'), path: '/', icon: 'dashboard' },
     { label: t('nav.catalog'), path: '/catalog', icon: 'storefront' },
     { label: t('nav.history'), path: '/orders', icon: 'receipt_long' },
+    { label: t('nav.payments'), path: '/payments', icon: 'payments' },
     { label: t('nav.financials'), path: '/credit', icon: 'account_balance_wallet' },
   ];
 

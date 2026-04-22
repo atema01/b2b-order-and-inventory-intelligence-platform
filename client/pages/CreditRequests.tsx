@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { CreditRequest, Buyer } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
 
 const CreditRequests: React.FC = () => {
   const navigate = useNavigate();
@@ -10,6 +11,7 @@ const CreditRequests: React.FC = () => {
   const [buyers, setBuyers] = useState<Buyer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [refreshToken, setRefreshToken] = useState(0);
   const { t } = useLanguage();
 
   useEffect(() => {
@@ -51,7 +53,15 @@ const CreditRequests: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [refreshToken]);
+
+  useRealtimeEvent('realtime:credits', () => {
+    setRefreshToken((value) => value + 1);
+  });
+
+  useRealtimeEvent('realtime:payments', () => {
+    setRefreshToken((value) => value + 1);
+  });
 
   const pendingAmount = requests
     .filter(r => r.status === 'Pending')

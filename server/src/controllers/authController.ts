@@ -17,7 +17,6 @@ export const register = async (req: Request, res: Response) => {
     role_id, // ← Use role_id, not role string
     companyName,
     address,
-    creditLimit = 0,
     paymentTerms = 'Net 30',
     tier = 'Bronze'
   } = req.body;
@@ -78,13 +77,13 @@ export const register = async (req: Request, res: Response) => {
       queryText = `
         INSERT INTO users (
           email, password_hash, name, phone, company_name, address,
-          credit_limit, available_credit, payment_terms, tier, discount_rate, join_date, role_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9, $10, CURRENT_DATE, $11)
+          payment_terms, tier, discount_rate, join_date, role_id
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_DATE, $10)
         RETURNING id, email, name, company_name, role_id;
       `;
       values = [
         email, passwordHash, name, phone, companyName, address,
-        creditLimit, paymentTerms, tierName, discountRate, role_id
+        paymentTerms, tierName, discountRate, role_id
       ];
     } else {
       // staff or admin

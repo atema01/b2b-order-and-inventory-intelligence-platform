@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Notification } from '../types';
 import LoadingState from '../components/LoadingState';
+import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
 
 type NotificationFilter = 'New' | 'All' | 'Order' | 'Payment' | 'Credit' | 'Inventory' | 'System';
 
@@ -22,6 +23,7 @@ const Notifications: React.FC = () => {
   const [activeFilter, setActiveFilter] = useState<NotificationFilter>('New');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
+  const [refreshToken, setRefreshToken] = useState(0);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -47,7 +49,11 @@ const Notifications: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [refreshToken]);
+
+  useRealtimeEvent('realtime:notifications', () => {
+    setRefreshToken((value) => value + 1);
+  });
 
   const handleMarkAllRead = async () => {
     try {
