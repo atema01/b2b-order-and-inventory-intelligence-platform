@@ -2,11 +2,11 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://your-api.onrender.com/api/:path*"
+      "destination": "https://b2b-intel-api.onrender.com/api/:path*"
     },
     {
       "source": "/socket.io/:path*",
-      "destination": "https://your-api.onrender.com/socket.io/:path*"
+      "destination": "https://b2b-intel-api.onrender.com/socket.io/:path*"
     }
   ]
 }

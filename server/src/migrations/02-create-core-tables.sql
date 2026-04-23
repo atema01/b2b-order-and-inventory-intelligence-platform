@@ -68,9 +68,9 @@ ON CONFLICT (id) DO NOTHING;
 
 -- Insert sample order (linking to your admin user)
 INSERT INTO orders (id, buyer_id, date, status, subtotal, tax, total, amount_paid, payment_status, created_by)
-VALUES (
+SELECT
   'ORD-2094',
-  (SELECT id FROM users WHERE email = 'admin@maraki.com'),
+  u.id,
   '2023-10-24',
   'Shipped',
   42500,
@@ -79,9 +79,11 @@ VALUES (
   0,
   'Unpaid',
   'seller'
-)
+FROM users u
+WHERE u.email = 'admin@maraki.com'
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO order_items (order_id, product_id, quantity, price_at_order)
-VALUES ('ORD-2094', 'P1', 14, 1250)
+SELECT 'ORD-2094', 'P1', 14, 1250
+WHERE EXISTS (SELECT 1 FROM orders WHERE id = 'ORD-2094')
 ON CONFLICT DO NOTHING;
