@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: b2b-intel-api
+    runtime: node
+    rootDir: server
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGIN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: FORECAST_AUTO_GENERATE
+        value: true
+      - key: FORECAST_SCHEDULE_DAY
+        value: 1
+      - key: FORECAST_SCHEDULE_HOUR
+        value: 2
+      - key: FORECAST_SCHEDULE_MINUTE
+        value: 0
+      - key: PROPHET_PYTHON_PATH
+        sync: false

@@ -3,6 +3,10 @@
     {
       "source": "/api/:path*",
       "destination": "https://your-api.onrender.com/api/:path*"
+    },
+    {
+      "source": "/socket.io/:path*",
+      "destination": "https://your-api.onrender.com/socket.io/:path*"
     }
   ]
 }
