@@ -1,15 +1,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { OrderStatus, Order, Product } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
-
-interface PredictionItem {
-  name: string;
-  growth: string;
-  badge: string;
-  isPositive: boolean;
-}
 
 type ForecastModel = 'holt-winters' | 'fb-prophet';
 
@@ -218,14 +211,6 @@ const buildClientForecast = (orders: Order[], model: ForecastModel, productId?: 
 
 const Analytics: React.FC = () => {
   const { t } = useLanguage();
-  
-  // Real Data State
-  const [growthPercentage, setGrowthPercentage] = useState(0);
-  const [growthTrend, setGrowthTrend] = useState<{name: string, val: number}[]>([]);
-  const [isGrowthPositive, setIsGrowthPositive] = useState(true);
-  const [totalRevenue, setTotalRevenue] = useState(0);
-  const [inventoryTurnover, setInventoryTurnover] = useState(0);
-  const [inventoryTurnoverTrend, setInventoryTurnoverTrend] = useState<{name: string, val: number}[]>([]);
   const [analyticsProducts, setAnalyticsProducts] = useState<Product[]>([]);
   const [analyticsOrders, setAnalyticsOrders] = useState<Order[]>([]);
   
@@ -252,9 +237,6 @@ const Analytics: React.FC = () => {
   const [customFileName, setCustomFileName] = useState('');
   const [customError, setCustomError] = useState('');
   const [customResolution, setCustomResolution] = useState('Auto');
-
-  // Prediction State
-  const [predictions, setPredictions] = useState<PredictionItem[]>([]);
 
   const normalizeStatus = (value: any): OrderStatus => {
     if (typeof value !== 'string') return OrderStatus.PENDING;
@@ -318,10 +300,9 @@ const Analytics: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [ordersResult, productsResult, turnoverResult, forecastResult] = await Promise.allSettled([
+        const [ordersResult, productsResult, forecastResult] = await Promise.allSettled([
           fetch('/api/orders', { credentials: 'include' }),
           fetch('/api/products', { credentials: 'include' }),
-          fetch('/api/orders/metrics/inventory-turnover', { credentials: 'include' }),
           fetch(`/api/orders/metrics/demand-forecast?model=${encodeURIComponent(forecastModel)}`, { credentials: 'include' })
         ]);
 
@@ -336,19 +317,6 @@ const Analytics: React.FC = () => {
           forecastResult.status === 'fulfilled' && forecastResult.value.ok
             ? await forecastResult.value.json()
             : null;
-
-        if (turnoverResult.status === 'fulfilled' && turnoverResult.value.ok) {
-          const turnoverData = await turnoverResult.value.json();
-          setInventoryTurnover(Number(turnoverData.turnover || 0));
-          setInventoryTurnoverTrend(
-            Array.isArray(turnoverData.trend) && turnoverData.trend.length > 0
-              ? turnoverData.trend
-              : [{ name: 'No Data', val: 0 }]
-          );
-        } else {
-          setInventoryTurnover(0);
-          setInventoryTurnoverTrend([{ name: 'No Data', val: 0 }]);
-        }
 
         const allOrders = ordersData
           .map(o => ({ ...o, status: normalizeStatus(o.status) }))
@@ -368,184 +336,10 @@ const Analytics: React.FC = () => {
         setHasSufficientData(Boolean(resolvedForecast?.hasSufficientData));
         setTimeResolution((resolvedForecast?.timeResolution as 'Day' | 'Week' | 'Month') || 'Month');
         setForecastModelUsed((resolvedForecast?.modelUsed as ForecastModel) || 'holt-winters');
-
-        if (allOrders.length === 0) {
-            // Initialize empty state
-            setGrowthTrend([{name: 'No Data', val: 0}]);
-            setPredictions([
-                { name: 'Data Pending', growth: '--', badge: 'Waiting...', isPositive: true },
-                { name: 'Data Pending', growth: '--', badge: 'Waiting...', isPositive: true },
-                { name: 'Data Pending', growth: '--', badge: 'Waiting...', isPositive: true },
-                { name: 'Data Pending', growth: '--', badge: 'Waiting...', isPositive: true },
-            ]);
-            return;
-        }
-
-        // 1. Determine Time Span
-        const timestamps = allOrders.map(o => new Date(o.date).getTime()).filter(t => !isNaN(t));
-        if (timestamps.length === 0) return;
-        
-        const minTime = Math.min(...timestamps);
-        const maxTime = Math.max(...timestamps);
-        const daySpan = (maxTime - minTime) / (1000 * 3600 * 24);
-
-    let mode: 'daily' | 'weekly' | 'monthly' = 'monthly';
-    if (daySpan <= 60) mode = 'daily';
-    else if (daySpan <= 730) mode = 'weekly';
-    else mode = 'monthly';
-
-    // 2. Aggregate Data
-    const aggregatedUnits: Record<string, number> = {};
-    const aggregatedRevenue: Record<string, number> = {};
-    const productSalesCurrent: Record<string, number> = {}; // For top products (current period)
-    const productSalesPrevious: Record<string, number> = {}; // For top products (previous period)
-    let totalRev = 0;
-
-    // Helper to format keys
-    const getKey = (d: Date) => {
-        if (mode === 'daily') return d.toISOString().split('T')[0]; // YYYY-MM-DD
-        if (mode === 'weekly') {
-            const start = getStartOfWeek(d);
-            return start.toISOString().split('T')[0]; // Use start of week date
-        }
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; // YYYY-MM
-    };
-
-    // Calculate current period start for product trends (last 7 days, last 30 days, or last month)
-    const now = new Date();
-    let trendCutoff = new Date();
-    let prevTrendCutoff = new Date();
-    
-    if (mode === 'daily') {
-        trendCutoff.setDate(now.getDate() - 7);
-        prevTrendCutoff.setDate(now.getDate() - 14);
-    } else if (mode === 'weekly') {
-        trendCutoff.setDate(now.getDate() - 30);
-        prevTrendCutoff.setDate(now.getDate() - 60);
-    } else {
-        trendCutoff.setMonth(now.getMonth() - 1);
-        prevTrendCutoff.setMonth(now.getMonth() - 2);
-    }
-
-        allOrders.forEach(o => {
-        const dateObj = new Date(o.date);
-        if (!isNaN(dateObj.getTime())) {
-            const key = getKey(dateObj);
-            aggregatedRevenue[key] = (aggregatedRevenue[key] || 0) + o.total;
-            totalRev += o.total;
-
-            const t = dateObj.getTime();
-            const inCurrent = t >= trendCutoff.getTime();
-            const inPrevious = t < trendCutoff.getTime() && t >= prevTrendCutoff.getTime();
-
-            o.items.forEach(item => {
-                aggregatedUnits[key] = (aggregatedUnits[key] || 0) + item.quantity;
-                
-                if (inCurrent) {
-                    productSalesCurrent[item.productId] = (productSalesCurrent[item.productId] || 0) + item.quantity;
-                }
-                if (inPrevious) {
-                    productSalesPrevious[item.productId] = (productSalesPrevious[item.productId] || 0) + item.quantity;
-                }
-            });
-        }
-        });
-        setTotalRevenue(totalRev);
-
-    // 3. Fill Gaps in Timeline
-    const timelineData: { date: Date, key: string, units: number, revenue: number }[] = [];
-    const startDate = new Date(minTime);
-    const endDate = new Date(maxTime);
-    
-    // Normalize start based on mode
-    let current = mode === 'daily' ? getStartOfDay(startDate) 
-                : mode === 'weekly' ? getStartOfWeek(startDate) 
-                : getStartOfMonth(startDate);
-
-    // Guard against infinite loop if date logic fails
-    let loopGuard = 0;
-    while (current <= endDate && loopGuard < 1000) {
-        const key = getKey(current);
-        timelineData.push({
-            date: new Date(current),
-            key: key,
-            units: aggregatedUnits[key] || 0,
-            revenue: aggregatedRevenue[key] || 0
-        });
-
-        // Increment
-        if (mode === 'daily') current.setDate(current.getDate() + 1);
-        else if (mode === 'weekly') current.setDate(current.getDate() + 7);
-        else current.setMonth(current.getMonth() + 1);
-        
-        loopGuard++;
-    }
-
-    // --- Growth Sparkline (Aligned with timeline) ---
-    setGrowthTrend(timelineData.map(d => ({ name: d.key, val: d.revenue })));
-
-    if (timelineData.length >= 2) {
-        const lastVal = timelineData[timelineData.length - 1].revenue;
-        const prevVal = timelineData[timelineData.length - 2].revenue;
-        if (prevVal === 0) {
-            setGrowthPercentage(lastVal > 0 ? 100 : 0);
-            setIsGrowthPositive(true);
-        } else {
-            const pct = ((lastVal - prevVal) / prevVal) * 100;
-            setGrowthPercentage(Math.abs(pct));
-            setIsGrowthPositive(pct >= 0);
-        }
-    }
-
-    // --- Top Products Trend ---
-    // Sort by current period volume
-    const topProdIds = Object.keys(productSalesCurrent).sort((a,b) => productSalesCurrent[b] - productSalesCurrent[a]).slice(0, 4);
-    
-    const predCards = topProdIds.map(pid => {
-        const p = allProducts.find(x => x.id === pid);
-        const curr = productSalesCurrent[pid];
-        const prev = productSalesPrevious[pid] || 0;
-        
-        let trend = 0;
-        if (prev > 0) trend = ((curr - prev) / prev) * 100;
-        else if (curr > 0) trend = 100;
-
-        let badge = 'Stable';
-        if (trend > 20) badge = 'Trending Up';
-        if (trend > 50) badge = 'High Demand';
-        if (trend < -10) badge = 'Slowing';
-        
-        return {
-            name: p ? p.name : 'Unknown',
-            growth: `${trend >= 0 ? '+' : ''}${trend.toFixed(0)}%`,
-            badge: badge,
-            isPositive: trend >= 0
-        };
-    });
-
-        if (predCards.length === 0) {
-           setPredictions([
-            { name: 'Data Pending', growth: '--', badge: 'Waiting...', isPositive: true },
-            { name: 'Data Pending', growth: '--', badge: 'Waiting...', isPositive: true },
-            { name: 'Data Pending', growth: '--', badge: 'Waiting...', isPositive: true },
-            { name: 'Data Pending', growth: '--', badge: 'Waiting...', isPositive: true },
-           ]);
-        } else {
-           setPredictions(predCards);
-        }
       } catch (err) {
         console.error('Analytics fetch error:', err);
         setForecastMessage(t('analytics.noData'));
-        setGrowthTrend([{name: 'No Data', val: 0}]);
-        setInventoryTurnover(0);
-        setInventoryTurnoverTrend([{ name: 'No Data', val: 0 }]);
         setForecastChartData([{ name: 'No Data', hist: 0, fc: null }]);
-        setPredictions([
-            { name: 'Data Pending', growth: '--', badge: 'Waiting...', isPositive: true },
-            { name: 'Data Pending', growth: '--', badge: 'Waiting...', isPositive: true },
-            { name: 'Data Pending', growth: '--', badge: 'Waiting...', isPositive: true },
-            { name: 'Data Pending', growth: '--', badge: 'Waiting...', isPositive: true },
-        ]);
       }
     };
 
@@ -586,51 +380,6 @@ const Analytics: React.FC = () => {
 
     loadProductForecast();
   }, [analyticsOrders, forecastModel, selectedForecastProductId, forecastRefreshToken]);
-
-  const handleExport = () => {
-    const csvRows = [];
-    const dateStr = new Date().toLocaleDateString();
-
-    // 1. Header
-    csvRows.push(['B2B Intel Analytics Report', `Generated: ${dateStr}`]);
-    csvRows.push([]); // blank
-
-    // 2. Summary
-    csvRows.push(['--- Summary Statistics ---']);
-    csvRows.push(['Total Revenue', `ETB ${totalRevenue.toLocaleString()}`]);
-    csvRows.push(['Sales Growth', `${isGrowthPositive ? '+' : '-'}${growthPercentage.toFixed(1)}%`]);
-    csvRows.push([]);
-
-    // 3. Forecast Data
-    csvRows.push(['--- Demand Forecast Data ---']);
-    csvRows.push(['Period', 'Historical Units', 'Forecasted Units']);
-    forecastChartData.forEach(row => {
-        if (row.name === 'No Data') return;
-        const hist = row.hist !== null ? row.hist : '';
-        const fc = row.fc !== null ? row.fc : '';
-        csvRows.push([`"${row.name}"`, hist, fc]);
-    });
-    csvRows.push([]);
-
-    // 4. Top Products
-    csvRows.push(['--- Top Product Trends ---']);
-    csvRows.push(['Product Name', 'Metric', 'Status']);
-    predictions.forEach(p => {
-        csvRows.push([`"${p.name}"`, `"${p.growth}"`, `"${p.badge}"`]);
-    });
-
-    // Create and download
-    const csvContent = "data:text/csv;charset=utf-8," 
-        + csvRows.map(e => e.join(",")).join("\n");
-    
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `analytics_report_${dateStr.replace(/\//g, '-')}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -793,97 +542,10 @@ const Analytics: React.FC = () => {
 
   return (
     <div className="p-4 lg:p-8 space-y-8 max-w-7xl mx-auto pb-32">
-      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
+      <div className="flex flex-col gap-2">
         <div>
           <h1 className="text-2xl lg:text-3xl font-black text-slate-800 tracking-tight">{t('analytics.title')}</h1>
           <p className="text-gray-500 font-medium mt-1">{t('analytics.subtitle')}</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="min-w-[160px]">
-            <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5 ml-1">{t('analytics.viewScope')}</label>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 material-symbols-outlined text-gray-400">tune</span>
-              <select disabled className="w-full pl-10 pr-4 py-2.5 bg-gray-50 border-gray-200 rounded-xl text-sm font-bold text-gray-500 shadow-sm cursor-not-allowed">
-                <option>Auto ({timeResolution})</option>
-              </select>
-            </div>
-          </div>
-          <button 
-            onClick={handleExport}
-            className="bg-primary text-white p-3 rounded-xl hover:bg-primary-hover shadow-lg shadow-primary/10 active:scale-95 transition-all self-end"
-            title="Download Report CSV"
-          >
-            <span className="material-symbols-outlined block">download</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Mini Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        
-        {/* Sales Growth Card */}
-        <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm space-y-4">
-          <div className="flex justify-between items-start">
-            <p className="text-sm font-bold text-gray-500">{t('analytics.salesGrowth')}</p>
-            <div className="w-24 h-10">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={growthTrend}>
-                  <Line 
-                    type="monotone" 
-                    dataKey="val" 
-                    stroke={isGrowthPositive ? "#10B981" : "#EF4444"} 
-                    strokeWidth={3} 
-                    dot={false} 
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-          <h3 className={`text-3xl font-black ${isGrowthPositive ? 'text-emerald-500' : 'text-red-500'}`}>
-            {isGrowthPositive ? '+' : '-'}{growthPercentage.toFixed(1)}%
-          </h3>
-          <p className="text-xs text-gray-400 flex items-center gap-1 font-bold">
-            <span className="material-symbols-outlined text-xs">
-                {isGrowthPositive ? 'trending_up' : 'trending_down'}
-            </span> 
-            {t('analytics.vsPrevious')} {timeResolution.toLowerCase()}
-          </p>
-        </div>
-
-        <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm space-y-4">
-          <div className="flex justify-between items-start">
-            <p className="text-sm font-bold text-gray-500">{t('analytics.totalRevenue')}</p>
-            <div className="w-24 h-10">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={growthTrend}>
-                  <Line type="monotone" dataKey="val" stroke="#005A9C" strokeWidth={3} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-          <h3 className="text-3xl font-black text-slate-800">
-            {totalRevenue > 1000000 ? `${(totalRevenue/1000000).toFixed(1)}M` : `${(totalRevenue/1000).toFixed(1)}K`} <span className="text-sm text-gray-400">ETB</span>
-          </h3>
-          <p className="text-xs text-gray-400 flex items-center gap-1 font-bold">
-            <span className="material-symbols-outlined text-xs">payments</span> {t('analytics.allTime')}
-          </p>
-        </div>
-
-        <div className="bg-white p-6 rounded-3xl border border-gray-100 shadow-sm space-y-4">
-          <div className="flex justify-between items-start">
-            <p className="text-sm font-bold text-gray-500">{t('analytics.inventoryTurnover')}</p>
-            <div className="w-24 h-10">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={inventoryTurnoverTrend}>
-                  <Line type="monotone" dataKey="val" stroke="#F59E0B" strokeWidth={3} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-          <h3 className="text-3xl font-black text-slate-800">{inventoryTurnover.toFixed(2)}x</h3>
-          <p className="text-xs text-gray-400 flex items-center gap-1 font-bold">
-            <span className="material-symbols-outlined text-xs">sync</span> {t('analytics.efficiencyScore')}
-          </p>
         </div>
       </div>
 
@@ -1229,26 +891,6 @@ const Analytics: React.FC = () => {
         </div>
       </section>
 
-      {/* Predictions Grid */}
-      <section className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
-        <div className="p-6 border-b border-gray-50 flex items-center gap-3">
-          <span className="material-symbols-outlined text-emerald-600">trending_up</span>
-          <h2 className="text-lg font-black text-slate-800">{t('analytics.topTrends')} <span className="text-gray-400 font-bold ml-2">({t('analytics.recentVsPrev')})</span></h2>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-gray-50">
-          {predictions.map((item, i) => (
-            <div key={i} className="p-6 space-y-4 hover:bg-gray-50 transition-colors cursor-pointer">
-              <p className="text-[10px] font-black uppercase text-gray-400 tracking-widest leading-relaxed h-8 line-clamp-2">{item.name}</p>
-              <div className="flex items-end justify-between">
-                <span className={`text-2xl font-black ${item.isPositive ? 'text-emerald-500' : 'text-red-500'}`}>{item.growth}</span>
-                <span className={`px-2 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider ${item.isPositive ? 'bg-emerald-50 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>
-                    {item.badge}
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
     </div>
   );
 };

@@ -31,6 +31,7 @@ import AddBulkRule from './pages/AddBulkRule';
 import BulkRuleDetails from './pages/BulkRuleDetails';
 import AddRole from './pages/AddRole';
 import AddStaff from './pages/AddStaff';
+import Report from './pages/Report';
 import Analytics from './pages/Analytics';
 import Notifications from './pages/Notifications';
 import BuyerNotifications from './pages/BuyerNotifications';
@@ -191,6 +192,7 @@ const RootRouter: React.FC = () => {
         <Route path="/pricing/:id" element={<RequirePermission permission="Pricing"><PricingDetails /></RequirePermission>} />
         <Route path="/pricing/bulk/add" element={<RequirePermission permission="Pricing"><AddBulkRule /></RequirePermission>} />
         <Route path="/pricing/bulk/:id" element={<RequirePermission permission="Pricing"><BulkRuleDetails /></RequirePermission>} />
+        <Route path="/reports" element={<RequirePermission permission="Reports"><Report /></RequirePermission>} />
         <Route path="/analytics" element={<RequirePermission permission="Reports"><Analytics /></RequirePermission>} />
         <Route path="/notifications" element={<Notifications />} />
         <Route path="/alerts" element={<RequirePermission permission="Products"><Alerts /></RequirePermission>} />
@@ -284,7 +286,7 @@ const SellerLayout: React.FC<{ children: React.ReactNode, onLogout: () => void }
   });
 
   const currentPath = location.pathname === '' ? '/' : location.pathname;
-  const topLevelPaths = ['/', '/orders', '/products', '/analytics', '/payments', '/buyers', '/staff', '/roles', '/pricing', '/returns', '/credits', '/logs', '/settings'];
+  const topLevelPaths = ['/', '/orders', '/products', '/reports', '/analytics', '/payments', '/buyers', '/staff', '/roles', '/pricing', '/returns', '/credits', '/logs', '/settings'];
   const isTopLevel = topLevelPaths.includes(currentPath);
 
   const handleBack = (e: React.MouseEvent) => {
@@ -330,6 +332,7 @@ const SellerLayout: React.FC<{ children: React.ReactNode, onLogout: () => void }
     if (path.startsWith('/alerts')) return t('header.alerts');
     if (path === '/logs') return t('header.logs');
     if (path === '/settings') return t('header.settings');
+    if (path === '/reports') return t('header.reports');
     if (path === '/analytics') return t('header.analytics');
     return path.split('/')[1] || t('header.dashboard');
   };
