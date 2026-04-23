@@ -6,7 +6,8 @@
     "build": "tsc",
     "dev": "nodemon --exec ts-node src/server.ts",
     "start": "node dist/server.js",
-    "migrate": "node scripts/run-migrations.js"
+    "migrate": "node scripts/run-migrations.js",
+    "seed-admin": "node scripts/seed-admin.js"
   },
   "keywords": [],
   "author": "",

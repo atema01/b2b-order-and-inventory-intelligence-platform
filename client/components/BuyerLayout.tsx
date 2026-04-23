@@ -129,6 +129,11 @@ const BuyerLayout: React.FC<BuyerLayoutProps> = ({ children, onLogout }) => {
     navigate('/catalog?openCart=true');
   };
 
+  const handleLogout = async () => {
+    await saveDraft();
+    onLogout();
+  };
+
   const navItems = [
     { label: t('nav.dashboard'), path: '/', icon: 'dashboard' },
     { label: t('nav.catalog'), path: '/catalog', icon: 'storefront' },
@@ -182,6 +187,27 @@ const BuyerLayout: React.FC<BuyerLayoutProps> = ({ children, onLogout }) => {
                     <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest truncate">{buyer?.companyName}</p>
                 </div>
             </div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  navigate('/settings');
+                  setIsMobileMenuOpen(false);
+                }}
+                className="flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 text-xs font-black uppercase tracking-widest text-slate-600 border border-gray-200"
+              >
+                <span className="material-symbols-outlined text-base">settings</span>
+                {t('nav.settings')}
+              </button>
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="flex items-center justify-center gap-2 rounded-xl bg-red-50 px-4 py-3 text-xs font-black uppercase tracking-widest text-red-600 border border-red-100"
+              >
+                <span className="material-symbols-outlined text-base">logout</span>
+                {t('logout')}
+              </button>
+            </div>
         </div>
 
         <div className="flex-1 overflow-y-auto py-6 px-4 space-y-1">
@@ -217,10 +243,7 @@ const BuyerLayout: React.FC<BuyerLayoutProps> = ({ children, onLogout }) => {
 
         <div className="p-4 border-t border-gray-100">
           <button
-            onClick={async () => {
-              await saveDraft();
-              onLogout();
-            }}
+            onClick={handleLogout}
             className="flex items-center gap-3 px-4 py-3 text-red-500 hover:bg-red-50 rounded-xl font-bold text-sm w-full transition-all"
           >
             <span className="material-symbols-outlined">logout</span>
