@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import pool from '../config/db';
 import { hashPassword, comparePassword, generateToken } from '../utils/auth';
 import { logActivity } from '../utils/activityLog';
+import { validateLoginPayload } from '../utils/loginValidation';
 
 /**
  * POST /api/auth/register
@@ -147,9 +148,10 @@ export const register = async (req: Request, res: Response) => {
  */
 export const login = async (req: Request, res: Response) => {
   const { email, password, accountType } = req.body;
+  const validation = validateLoginPayload(email, password);
 
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password required' });
+  if (!validation.isValid) {
+    return res.status(400).json({ error: validation.error });
   }
 
   if (accountType !== 'buyer' && accountType !== 'seller') {
@@ -159,7 +161,7 @@ export const login = async (req: Request, res: Response) => {
   try {
     const result = await pool.query(
       'SELECT id, email, role_id, password_hash, status FROM users WHERE email = $1',
-      [email]
+      [validation.cleanedIdentifier]
     );
 
     if (result.rows.length === 0) {
@@ -180,7 +182,7 @@ export const login = async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'This account must use the buyer login.' });
     }
 
-    const isValid = await comparePassword(password, user.password_hash);
+    const isValid = await comparePassword(validation.cleanedPassword, user.password_hash);
     if (!isValid) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }

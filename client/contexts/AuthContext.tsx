@@ -1,5 +1,6 @@
 // AuthContext.tsx
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { validateLoginCredentials } from '../utils/loginValidation';
 
 // Define the user payload structure matching your backend response
 interface UserPayload {
@@ -88,13 +89,22 @@ const login = async (
   type: 'buyer' | 'seller'
 ): Promise<{ success: boolean; error?: string }> => {
   try {
+    const validation = validateLoginCredentials(identifier, password);
+    if (!validation.isValid) {
+      return { success: false, error: validation.error };
+    }
+
     setIsLoading(true);
 
     const response = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ email: identifier, password, accountType: type }),
+      body: JSON.stringify({
+        email: validation.cleanedIdentifier,
+        password: validation.cleanedPassword,
+        accountType: type
+      }),
     });
 
     if (!response.ok) {

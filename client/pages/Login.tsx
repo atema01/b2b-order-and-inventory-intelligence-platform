@@ -3,6 +3,12 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
+import {
+  normalizeLoginIdentifier,
+  sanitizeLoginIdentifierInput,
+  sanitizeLoginPasswordInput,
+  validateLoginCredentials,
+} from '../utils/loginValidation';
 
 const Login: React.FC = () => {
   const { t } = useLanguage();
@@ -17,11 +23,21 @@ const Login: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsLoading(true);
     setError('');
 
+    const validation = validateLoginCredentials(identifier, password);
+    setIdentifier(validation.cleanedIdentifier);
+    setPassword(validation.cleanedPassword);
+
+    if (!validation.isValid) {
+      setError(validation.error || 'Login failed');
+      return;
+    }
+
+    setIsLoading(true);
+
     try {
-      const result = await login(identifier, password, 'seller');
+      const result = await login(validation.cleanedIdentifier, validation.cleanedPassword, 'seller');
       if (result.success) {
         navigate('/');
       } else {
@@ -62,7 +78,11 @@ const Login: React.FC = () => {
                 className="w-full h-[52px] px-4 rounded-[12px] border border-[#E2E8F0] text-[#0F172A] font-medium placeholder:text-[#94A3B8] focus:border-[#005A9C] focus:ring-1 focus:ring-[#005A9C] outline-none transition-all pr-12"
                 placeholder="S-0001 or admin@b2bintel.com"
                 value={identifier}
-                onChange={(e) => setIdentifier(e.target.value)}
+                onChange={(e) => {
+                  setIdentifier(sanitizeLoginIdentifierInput(e.target.value));
+                  if (error) setError('');
+                }}
+                onBlur={() => setIdentifier(normalizeLoginIdentifier(identifier))}
               />
               <span className="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 text-[#64748B] pointer-events-none text-[20px]">
                 badge
@@ -79,7 +99,10 @@ const Login: React.FC = () => {
                 className="w-full h-[52px] px-4 rounded-[12px] border border-[#E2E8F0] text-[#0F172A] font-medium placeholder:text-[#94A3B8] focus:border-[#005A9C] focus:ring-1 focus:ring-[#005A9C] outline-none transition-all tracking-widest pr-12"
                 placeholder="••••••••"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(sanitizeLoginPasswordInput(e.target.value));
+                  if (error) setError('');
+                }}
               />
               <button 
                 type="button"

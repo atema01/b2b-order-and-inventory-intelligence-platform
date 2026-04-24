@@ -275,6 +275,15 @@ const BuyerDashboard: React.FC = () => {
           })}
         </div>
       </section>
+
+      <button
+        type="button"
+        onClick={goToCatalog}
+        className="fixed bottom-6 right-6 z-40 flex h-16 w-16 items-center justify-center rounded-full border-4 border-white bg-[#00A3C4] text-white shadow-2xl shadow-[#00A3C4]/30 transition-all active:scale-90 group"
+        title="Open Catalog"
+      >
+        <span className="material-symbols-outlined text-3xl font-light transition-transform duration-300 group-hover:scale-110">smart_toy</span>
+      </button>
     </div>
   );
 };
