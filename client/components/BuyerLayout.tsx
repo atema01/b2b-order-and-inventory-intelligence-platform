@@ -7,6 +7,7 @@ import { getCartCount } from '../services/cartStore';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
+import ChatbotWidget from './ChatbotWidget';
 
 interface BuyerLayoutProps {
   children: React.ReactNode;
@@ -321,6 +322,7 @@ const BuyerLayout: React.FC<BuyerLayoutProps> = ({ children, onLogout }) => {
         {/* Page Content */}
         <main className="flex-1 overflow-y-auto bg-[#FAFAFA] relative">
           {children}
+          <ChatbotWidget />
         </main>
       </div>
     </div>

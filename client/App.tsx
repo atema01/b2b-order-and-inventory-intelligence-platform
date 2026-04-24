@@ -52,6 +52,7 @@ import BuyerPayment from './pages/BuyerPayment';
 import BuyerPayments from './pages/BuyerPayments';
 import Sidebar from './components/Sidebar';
 import BuyerLayout from './components/BuyerLayout';
+import ChatbotWidget from './components/ChatbotWidget';
 import { Staff } from './types';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
@@ -397,6 +398,7 @@ const SellerLayout: React.FC<{ children: React.ReactNode, onLogout: () => void }
 
         <main className="flex-1 relative pt-16">
           {children}
+          <ChatbotWidget />
         </main>
       </div>
     </div>

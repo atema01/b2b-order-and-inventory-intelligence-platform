@@ -445,16 +445,6 @@ const Dashboard: React.FC = () => {
         )}
       </div>
 
-      {/* FAB (Now visible on Desktop too) - Controlled by 'Orders' Permission */}
-      {canViewOrders && (
-        <Link 
-          to="/orders/create"
-          className="fixed bottom-6 right-6 w-16 h-16 bg-primary text-white rounded-full shadow-2xl flex items-center justify-center active:scale-90 transition-all z-40 border-4 border-white group"
-          title={t('dash.newOrder')}
-        >
-          <span className="material-symbols-outlined text-3xl font-light group-hover:scale-110 transition-transform duration-300">smart_toy</span>
-        </Link>
-      )}
     </div>
   );
 };
