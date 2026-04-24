@@ -6,12 +6,14 @@ import dotenv from 'dotenv';
 // Load environment variables from .env file
 dotenv.config();
 
-const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
 const isProduction = process.env.NODE_ENV === 'production';
+const isDevelopment = process.env.NODE_ENV === 'development';
+const shouldUseDatabaseUrl = !isDevelopment && Boolean(process.env.DATABASE_URL);
 
 // Create a connection pool to PostgreSQL.
-// Prefer DATABASE_URL for hosted environments like Render + Supabase.
-const pool = hasDatabaseUrl
+// In development, always use the local DB_* settings.
+// In non-development environments, prefer DATABASE_URL for hosted databases.
+const pool = shouldUseDatabaseUrl
   ? new Pool({
       connectionString: process.env.DATABASE_URL,
       ssl: isProduction ? { rejectUnauthorized: false } : undefined,

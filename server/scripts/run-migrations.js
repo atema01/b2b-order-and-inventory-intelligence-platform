@@ -8,10 +8,11 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 const migrationsDir = path.resolve(__dirname, '../src/migrations');
 
 const buildClientConfig = () => {
-  const hasDatabaseUrl = Boolean(process.env.DATABASE_URL);
   const isProduction = process.env.NODE_ENV === 'production';
+  const isDevelopment = process.env.NODE_ENV === 'development';
+  const shouldUseDatabaseUrl = !isDevelopment && Boolean(process.env.DATABASE_URL);
 
-  if (hasDatabaseUrl) {
+  if (shouldUseDatabaseUrl) {
     return {
       connectionString: process.env.DATABASE_URL,
       ssl: isProduction ? { rejectUnauthorized: false } : false
