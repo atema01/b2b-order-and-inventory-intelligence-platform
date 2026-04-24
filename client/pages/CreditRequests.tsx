@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { CreditRequest, Buyer } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
+import LoadingState from '../components/LoadingState';
 
 const CreditRequests: React.FC = () => {
   const navigate = useNavigate();
@@ -77,14 +78,7 @@ const CreditRequests: React.FC = () => {
     .reduce((acc, r) => acc + (r.approvedAmount || r.amount), 0);
 
   if (loading) {
-    return (
-      <div className="p-4 lg:p-8 flex items-center justify-center min-h-[50vh]">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-slate-600">Loading credit requests...</p>
-        </div>
-      </div>
-    );
+    return <LoadingState message="Loading credit requests..." compact />;
   }
 
   if (error) {

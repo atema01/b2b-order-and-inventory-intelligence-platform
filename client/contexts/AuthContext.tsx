@@ -32,6 +32,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Initial Load - fetch current user from backend
   useEffect(() => {
+    const currentHashPath = window.location.hash.replace(/^#/, '') || '/';
+    const isPublicAuthRoute =
+      currentHashPath === '/login' ||
+      currentHashPath === '/login/seller' ||
+      currentHashPath === '/login/buyer';
+
+    if (isPublicAuthRoute) {
+      setIsLoading(false);
+    }
+
     const fetchUser = async () => {
       try {
         const response = await fetch('/api/auth/me', {
@@ -50,7 +60,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     };
 
-    fetchUser();
+    void fetchUser();
   }, []);
 
   // Session Timeout Logic (15 Minutes Inactivity) - preserved as-is

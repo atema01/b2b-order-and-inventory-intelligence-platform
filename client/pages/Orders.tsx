@@ -5,6 +5,7 @@ import { Order, OrderStatus, Buyer } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
 import RefreshIndicator from '../components/RefreshIndicator';
+import LoadingState from '../components/LoadingState';
 
 const normalizeStatus = (value: any): OrderStatus => {
   if (typeof value !== 'string') return OrderStatus.PENDING;
@@ -285,10 +286,7 @@ const Orders: React.FC = () => {
 
       <div className="max-w-7xl mx-auto px-4 pt-10 lg:pt-12 pb-12 lg:px-8">
         {isLoading ? (
-          <div className="py-24 text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mx-auto mb-4"></div>
-            <p className="text-slate-600">Loading orders...</p>
-          </div>
+          <LoadingState message="Loading orders..." compact />
         ) : error ? (
           <div className="py-16 text-center bg-white rounded-[40px] border border-red-100">
             <p className="text-red-700 font-bold">Failed to load orders.</p>

@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Buyer, CreditRequest, Payment, PaymentStatus } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
+import LoadingState from '../components/LoadingState';
 
 const Payments: React.FC = () => {
   const navigate = useNavigate();
@@ -114,10 +115,7 @@ const Payments: React.FC = () => {
         <h1 className="text-2xl font-black text-slate-800">{t('payments.title')}</h1>
       </div>
       {loading && (
-        <div className="py-16 text-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mx-auto mb-4"></div>
-        <p className="text-slate-600">Loading payments...</p>
-        </div>
+        <LoadingState message="Loading payments..." compact />
       )}
 
       {error && (

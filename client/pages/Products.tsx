@@ -6,6 +6,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { DEFAULT_STORAGE_LOCATIONS, fetchStorageLocations } from '../utils/storageLocations';
 import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
 import RefreshIndicator from '../components/RefreshIndicator';
+import LoadingState from '../components/LoadingState';
 
 type ProductListQueryData = {
   products: Product[];
@@ -123,14 +124,7 @@ const Products: React.FC = () => {
   }, [searchParams]);
 
   if (isLoading) {
-    return (
-      <div className="p-4 lg:p-8 flex items-center justify-center min-h-screen">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-slate-600">Loading products...</p>
-        </div>
-      </div>
-    );
+    return <LoadingState message="Loading products..." />;
   }
 
 

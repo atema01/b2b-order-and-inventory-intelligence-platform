@@ -1,11 +1,9 @@
 // vite.config.ts
 import path from 'path';
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, '.', '');
-
+export default defineConfig(() => {
   return {
     // 🔹 Run on port 3000 (or change to 5173 if you prefer)
     server: {
@@ -27,14 +25,22 @@ export default defineConfig(({ mode }) => {
       },
     },
     plugins: [react()],
-    define: {
-      'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            react: ['react', 'react-dom', 'react-router-dom'],
+            charts: ['recharts'],
+            query: ['@tanstack/react-query'],
+            realtime: ['socket.io-client']
+          }
+        }
+      }
+    }
   };
 });

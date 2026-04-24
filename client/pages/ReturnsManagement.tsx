@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { ReturnLog } from '../types';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { useLanguage } from '../contexts/LanguageContext';
+import LoadingState from '../components/LoadingState';
 
 const ReturnsManagement: React.FC = () => {
   const [logs, setLogs] = useState<ReturnLog[]>([]);
@@ -121,14 +122,7 @@ const ReturnsManagement: React.FC = () => {
     .slice(0, 3);
 
   if (loading) {
-    return (
-      <div className="p-4 lg:p-8 flex items-center justify-center min-h-[50vh]">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-slate-600">Loading returns...</p>
-        </div>
-      </div>
-    );
+    return <LoadingState message="Loading returns..." compact />;
   }
 
   if (error) {

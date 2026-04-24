@@ -22,6 +22,7 @@ import creditRoutes from './routes/creditRoutes';
 import paymentRoutes from './routes/paymentRoutes';
 import pricingRoutes from './routes/pricingRoutes';
 import aiRoutes from './routes/aiRoutes';
+import dashboardRoutes from './routes/dashboardRoutes';
 import { ensureFinanceSchema } from './utils/ensureFinanceSchema';
 import { ensureForecastSchema } from './utils/ensureForecastSchema';
 import { startForecastScheduler } from './services/forecastScheduler';
@@ -78,6 +79,7 @@ app.use('/api/credits', creditRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/pricing', pricingRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 app.get('/api', (req, res) => {
   res.json({

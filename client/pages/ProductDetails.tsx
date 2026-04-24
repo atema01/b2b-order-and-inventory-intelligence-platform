@@ -4,6 +4,7 @@ import { Product, Category, StorageLocationId } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { DEFAULT_STORAGE_LOCATIONS, fetchStorageLocations } from '../utils/storageLocations';
 import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
+import LoadingState from '../components/LoadingState';
 
 const ProductDetails: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -75,7 +76,7 @@ const ProductDetails: React.FC = () => {
   }, []);
 
   if (loading) {
-    return <div className="p-8 text-center"><div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mx-auto mb-4"></div><p className="text-slate-600">{t('common.loading')}</p></div>;
+    return <LoadingState message={t('common.loading')} compact />;
   }
 
   if (!product || !editForm) return <div className="p-8 text-center text-gray-400 font-bold">{t('prod.notFound')}</div>;

@@ -1,172 +1,122 @@
-// Dashboard.tsx
 import React from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { Order, Product, OrderStatus, Buyer, Staff, StorageLocationId } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
-import { DEFAULT_STORAGE_LOCATIONS, fetchStorageLocations } from '../utils/storageLocations';
 import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
 import RefreshIndicator from '../components/RefreshIndicator';
+import LoadingState from '../components/LoadingState';
+
+type DashboardTrend = {
+  text: string;
+  up: boolean;
+};
+
+type DashboardStat = {
+  value: number;
+  trend: DashboardTrend;
+};
+
+type DashboardLocation = {
+  id: string;
+  name: string;
+  items: number;
+  value: number;
+  capUnits: number;
+  capPercent: number;
+};
+
+type DashboardOrder = {
+  id: string;
+  date: string;
+  status: string;
+  total: number;
+  buyerLabel: string;
+  unitCount: number;
+};
+
+type DashboardSummary = {
+  stats: {
+    inventoryValue: DashboardStat;
+    totalSkus: DashboardStat;
+    onOrder: DashboardStat;
+    sellThrough: DashboardStat;
+  };
+  lowStockCount: number;
+  locations: DashboardLocation[];
+  recentOrders: DashboardOrder[];
+};
+
+const formatCompactCurrency = (value: number) => {
+  if (value >= 1000000) return `${(value / 1000000).toFixed(1)}M`;
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}K`;
+  return value.toLocaleString();
+};
+
+const getStatusBadgeClasses = (status: string) => {
+  const normalized = status.trim().toLowerCase();
+  if (normalized === 'pending') return 'bg-amber-100 text-amber-700';
+  if (normalized === 'processing') return 'bg-blue-100 text-blue-700';
+  if (normalized === 'delivered') return 'bg-green-100 text-green-700';
+  return 'bg-gray-100 text-gray-700';
+};
 
 const Dashboard: React.FC = () => {
   const { t } = useLanguage();
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
-  // Extract permissions and current user from auth context
   const permissions = user?.permissions || {};
   const canViewReports = Boolean(permissions['Reports']);
   const canViewProducts = Boolean(permissions['Products']);
   const canViewOrders = Boolean(permissions['Orders']);
-  const canViewBuyers = Boolean(permissions['Buyers']);
-  const currentUser = user as Staff | null;
-
-  const normalizeStatus = (value: any): OrderStatus => {
-    if (typeof value !== 'string') return OrderStatus.PENDING;
-    const map: Record<string, OrderStatus> = {
-      DRAFT: OrderStatus.DRAFT,
-      ON_REVIEW: OrderStatus.ON_REVIEW,
-      'ON REVIEW': OrderStatus.ON_REVIEW,
-      PENDING: OrderStatus.PENDING,
-      PROCESSING: OrderStatus.PROCESSING,
-      SHIPPED: OrderStatus.SHIPPED,
-      DELIVERED: OrderStatus.DELIVERED,
-      UNDELIVERED: OrderStatus.UNDELIVERED,
-      CANCELLED: OrderStatus.CANCELLED,
-      CANCELED: OrderStatus.CANCELLED,
-      DELETED: OrderStatus.DELETED,
-      Draft: OrderStatus.DRAFT,
-      'On Review': OrderStatus.ON_REVIEW,
-      Pending: OrderStatus.PENDING,
-      Processing: OrderStatus.PROCESSING,
-      Shipped: OrderStatus.SHIPPED,
-      Delivered: OrderStatus.DELIVERED,
-      Undelivered: OrderStatus.UNDELIVERED,
-      Cancelled: OrderStatus.CANCELLED,
-      Canceled: OrderStatus.CANCELLED,
-      Deleted: OrderStatus.DELETED
-    };
-    return map[value] || OrderStatus.PENDING;
-  };
-
-  const now = new Date();
-  const startOfCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-
-  const isBetween = (value: string, start: Date, end: Date) => {
-    const date = new Date(value);
-    return !Number.isNaN(date.getTime()) && date >= start && date < end;
-  };
-
-  const formatTrend = (current: number, previous: number) => {
-    if (previous === 0) {
-      if (current === 0) return { text: '0.0%', up: true };
-      return { text: '+100.0%', up: true };
-    }
-    const change = ((current - previous) / previous) * 100;
-    const sign = change > 0 ? '+' : '';
-    return { text: `${sign}${change.toFixed(1)}%`, up: change >= 0 };
-  };
-
-  // Resolve buyer label from embedded order fields first, then buyers lookup.
-  const getBuyerLabel = (order: any): string => {
-    return (
-      order?.buyerCompanyName ||
-      order?.buyerName ||
-      order?.companyName ||
-      order?.buyer?.companyName ||
-      order?.buyer?.name ||
-      dashboardData.buyers.find(b => b.id === order?.buyerId)?.companyName ||
-      'Unknown Buyer'
-    );
-  };
+  const firstName = user?.name?.split(' ')[0] || 'Admin';
 
   const {
-    data: dashboardData = { orders: [], products: [], buyers: [] },
+    data,
     isLoading,
     isFetching,
     error
   } = useQuery({
-    queryKey: ['dashboard', user?.id || 'guest', canViewReports, canViewProducts, canViewOrders, canViewBuyers],
-    queryFn: async (): Promise<{ orders: Order[]; products: Product[]; buyers: Buyer[] }> => {
-      const needsOrders = canViewOrders || canViewReports;
-      const needsProducts = canViewProducts || canViewReports;
-      const needsBuyers = canViewOrders && canViewBuyers;
-      let nextOrders: Order[] = [];
-      let nextProducts: Product[] = [];
-      let nextBuyers: Buyer[] = [];
+    queryKey: ['dashboard-summary', user?.id || 'guest'],
+    queryFn: async (): Promise<DashboardSummary> => {
+      const response = await fetch('/api/dashboard/summary', {
+        credentials: 'include'
+      });
 
-      if (needsOrders) {
-        const ordersRes = await fetch('/api/orders', { credentials: 'include' });
-        if (!ordersRes.ok) throw new Error('Failed to fetch orders');
-        const fetchedOrders = await ordersRes.json();
-        const normalizedOrders = fetchedOrders?.data ? fetchedOrders.data : fetchedOrders;
-        nextOrders = normalizedOrders.map((o: any) => ({ ...o, status: normalizeStatus(o.status) }));
+      if (!response.ok) {
+        throw new Error('Failed to fetch dashboard summary');
       }
 
-      if (needsProducts) {
-        const productsRes = await fetch('/api/products', { credentials: 'include' });
-        if (!productsRes.ok) throw new Error('Failed to fetch products');
-        const productsData = await productsRes.json();
-        nextProducts = Array.isArray(productsData) ? productsData : [];
-      }
-
-      if (needsBuyers) {
-        const buyersRes = await fetch('/api/buyers', { credentials: 'include' });
-        if (buyersRes.ok) {
-          const buyersData = await buyersRes.json();
-          nextBuyers = Array.isArray(buyersData) ? buyersData : [];
-        }
-      }
-
-      return {
-        orders: nextOrders,
-        products: nextProducts,
-        buyers: nextBuyers
-      };
-    }
+      return response.json();
+    },
+    staleTime: 60_000,
+    refetchOnMount: false
   });
-
-  const {
-    data: storageLocationsData,
-    isLoading: isStorageLocationsLoading
-  } = useQuery({
-    queryKey: ['storage-locations'],
-    queryFn: fetchStorageLocations
-  });
-  const storageLocations = storageLocationsData ?? DEFAULT_STORAGE_LOCATIONS;
 
   useRealtimeEvent('realtime:orders', () => {
-    queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
   });
 
   useRealtimeEvent('realtime:inventory', () => {
-    queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] });
   });
 
-  // Loading state
   if (isLoading) {
-    return (
-      <div className="p-4 lg:p-8 flex items-center justify-center min-h-screen">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-primary mx-auto mb-4"></div>
-          <p className="text-slate-600">Loading dashboard...</p>
-        </div>
-      </div>
-    );
+    return <LoadingState message="Loading dashboard..." />;
   }
 
-  // Error state
   if (error) {
     return (
       <div className="p-4 lg:p-8">
-        <div className="bg-red-50 border border-red-200 rounded-xl p-6 text-center">
-          <p className="text-red-700 font-medium mb-2">Failed to load dashboard</p>
-          <p className="text-red-600 text-sm mb-4">{error instanceof Error ? error.message : 'An unexpected error occurred'}</p>
-          <button 
-            onClick={() => queryClient.invalidateQueries({ queryKey: ['dashboard'] })}
-            className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-center">
+          <p className="mb-2 font-semibold text-red-700">Failed to load dashboard</p>
+          <p className="mb-4 text-sm text-red-600">
+            {error instanceof Error ? error.message : 'An unexpected error occurred'}
+          </p>
+          <button
+            onClick={() => queryClient.invalidateQueries({ queryKey: ['dashboard-summary'] })}
+            className="rounded-lg bg-red-600 px-4 py-2 text-white transition-colors hover:bg-red-700"
           >
             Retry
           </button>
@@ -175,279 +125,255 @@ const Dashboard: React.FC = () => {
     );
   }
 
-  // Calculate metrics (same as before)
-  const totalInventoryValue = dashboardData.products.reduce((acc, p) => {
-    const totalQty = storageLocations.reduce((sum, loc) => sum + (p.stock[loc.id as StorageLocationId] || 0), 0);
-    return acc + (totalQty * p.price);
-  }, 0);
-
-  const totalSKUs = dashboardData.products.length;
-
-  const itemsOnOrder = dashboardData.orders
-    .filter(o => o.status === OrderStatus.PENDING || o.status === OrderStatus.PROCESSING)
-    .reduce((acc, o) => acc + o.items.reduce((sum, item) => sum + item.quantity, 0), 0);
-
-  const deliveredUnits = dashboardData.orders
-    .filter(o => o.status === OrderStatus.DELIVERED)
-    .reduce((acc, o) => acc + o.items.reduce((sum, item) => sum + item.quantity, 0), 0);
-  
-  const onHandUnits = dashboardData.products.reduce((acc, p) => 
-    acc + storageLocations.reduce((sum, loc) => sum + (p.stock[loc.id as StorageLocationId] || 0), 0), 0);
-
-  const sellThroughRateVal = (deliveredUnits + onHandUnits) > 0 
-    ? ((deliveredUnits / (deliveredUnits + onHandUnits)) * 100).toFixed(1) 
-    : "0";
-
-  const previousMonthOrders = dashboardData.orders.filter((order) =>
-    isBetween(order.date, startOfLastMonth, startOfCurrentMonth)
-  );
-  const previousMonthOnOrder = previousMonthOrders
-    .filter(o => o.status === OrderStatus.PENDING || o.status === OrderStatus.PROCESSING)
-    .reduce((acc, o) => acc + o.items.reduce((sum, item) => sum + item.quantity, 0), 0);
-  const previousMonthDeliveredUnits = previousMonthOrders
-    .filter(o => o.status === OrderStatus.DELIVERED)
-    .reduce((acc, o) => acc + o.items.reduce((sum, item) => sum + item.quantity, 0), 0);
-  const previousMonthSellThrough = (previousMonthDeliveredUnits + onHandUnits) > 0
-    ? (previousMonthDeliveredUnits / (previousMonthDeliveredUnits + onHandUnits)) * 100
-    : 0;
-  const previousCatalogProducts = dashboardData.products.filter((product) => {
-    if (!product.createdAt) return true;
-    const created = new Date(product.createdAt);
-    return !Number.isNaN(created.getTime()) && created < startOfCurrentMonth;
-  });
-  const previousInventoryValue = previousCatalogProducts.reduce((acc, product) => {
-    const totalQty = storageLocations.reduce((sum, loc) => sum + (product.stock[loc.id as StorageLocationId] || 0), 0);
-    return acc + (totalQty * product.price);
-  }, 0);
-  const previousTotalSKUs = previousCatalogProducts.length;
-
-  const inventoryTrend = formatTrend(totalInventoryValue, previousInventoryValue);
-  const skuTrend = formatTrend(totalSKUs, previousTotalSKUs);
-  const onOrderTrend = formatTrend(itemsOnOrder, previousMonthOnOrder);
-  const sellThroughTrend = formatTrend(Number(sellThroughRateVal), previousMonthSellThrough);
-
-  const stats = [
-    { label: t('dash.invValue'), value: `ETB ${(totalInventoryValue / 1000000).toFixed(1)}M`, trend: inventoryTrend.text, up: inventoryTrend.up },
-    { label: t('dash.totalSkus'), value: totalSKUs.toLocaleString(), trend: skuTrend.text, up: skuTrend.up },
-    { label: t('dash.onOrder'), value: itemsOnOrder.toLocaleString(), trend: onOrderTrend.text, up: onOrderTrend.up },
-    { label: t('dash.sellThrough'), value: `${sellThroughRateVal}%`, trend: sellThroughTrend.text, up: sellThroughTrend.up },
-  ];
-
-  const lowStockCount = dashboardData.products.filter(p => p.status === 'Low' || p.status === 'Empty').length;
-
-  const locations = storageLocations.map((loc) => {
-    const items = dashboardData.products.reduce((acc, p) => acc + (p.stock[loc.id as StorageLocationId] || 0), 0);
-    const value = dashboardData.products.reduce((acc, p) => acc + ((p.stock[loc.id as StorageLocationId] || 0) * p.price), 0);
-    const capUnits = loc.capacityUnits;
-    const isCapacityPending = isStorageLocationsLoading;
-    const capPercent = !isCapacityPending && capUnits > 0 ? Math.min(100, Math.round((items / capUnits) * 100)) : 0;
-    const capTone = isCapacityPending
-      ? 'bg-gray-200'
-      : capUnits === 0
-      ? 'bg-gray-300'
-      : capPercent >= 85
-        ? 'bg-red-500'
-        : capPercent >= 60
-          ? 'bg-amber-500'
-          : 'bg-green-500';
-    return {
-      id: loc.id,
-      name: loc.name,
-      items,
-      value,
-      capUnits,
-      isCapacityPending,
-      capPercent,
-      capTone
-    };
-  });
-
-  const formatCurrency = (val: number) => {
-    if (val >= 1000000) return `${(val / 1000000).toFixed(1)}M`;
-    if (val >= 1000) return `${(val / 1000).toFixed(1)}K`;
-    return val.toString();
+  const summary = data ?? {
+    stats: {
+      inventoryValue: { value: 0, trend: { text: '0.0%', up: true } },
+      totalSkus: { value: 0, trend: { text: '0.0%', up: true } },
+      onOrder: { value: 0, trend: { text: '0.0%', up: true } },
+      sellThrough: { value: 0, trend: { text: '0.0%', up: true } }
+    },
+    lowStockCount: 0,
+    locations: [],
+    recentOrders: []
   };
 
-  const recentOrders = dashboardData.orders
-    .filter(o => o.status === OrderStatus.PENDING || o.status === OrderStatus.PROCESSING)
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-    .slice(0, 5);
+  const stats = [
+    {
+      label: t('dash.invValue'),
+      value: `ETB ${formatCompactCurrency(summary.stats.inventoryValue.value)}`,
+      trend: summary.stats.inventoryValue.trend.text,
+      up: summary.stats.inventoryValue.trend.up
+    },
+    {
+      label: t('dash.totalSkus'),
+      value: summary.stats.totalSkus.value.toLocaleString(),
+      trend: summary.stats.totalSkus.trend.text,
+      up: summary.stats.totalSkus.trend.up
+    },
+    {
+      label: t('dash.onOrder'),
+      value: summary.stats.onOrder.value.toLocaleString(),
+      trend: summary.stats.onOrder.trend.text,
+      up: summary.stats.onOrder.trend.up
+    },
+    {
+      label: t('dash.sellThrough'),
+      value: `${summary.stats.sellThrough.value}%`,
+      trend: summary.stats.sellThrough.trend.text,
+      up: summary.stats.sellThrough.trend.up
+    }
+  ];
 
   return (
-    <div className="p-4 lg:p-8 space-y-6 lg:space-y-8 pb-24 lg:pb-8">
-      
-      {/* Welcome Header */}
-      <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-2 mb-2">
+    <div className="mx-auto max-w-7xl space-y-6 px-4 pb-24 pt-4 lg:space-y-8 lg:px-8 lg:pb-8">
+      <div className="mb-2 flex flex-col justify-between gap-2 lg:flex-row lg:items-end">
         <div className="space-y-1">
-          <h2 className="text-2xl lg:text-3xl font-black text-slate-900 tracking-tight">
-            {t('dash.hello')}, {currentUser?.name.split(' ')[0] || 'Admin'}
+          <h2 className="text-2xl font-black tracking-tight text-slate-900 lg:text-3xl">
+            {t('dash.hello')}, {firstName}
           </h2>
-          <p className="text-slate-500 text-sm font-medium">
-            {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+          <p className="text-sm font-medium text-slate-500">
+            {new Date().toLocaleDateString('en-US', {
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric'
+            })}
           </p>
         </div>
         <RefreshIndicator visible={isFetching && !isLoading} />
       </div>
 
-      {/* Stats Grid - Controlled by 'Reports' Permission */}
       {canViewReports && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
-          {stats.map((stat, i) => (
-            <div key={i} className="bg-white p-4 lg:p-6 rounded-2xl lg:rounded-3xl border border-gray-100 shadow-sm hover:shadow-md transition-all">
-              <p className="text-[10px] lg:text-sm font-semibold text-gray-500 mb-1 lg:mb-2 uppercase tracking-wider">{stat.label}</p>
-              <p className="text-lg lg:text-3xl font-black text-slate-800">{stat.value}</p>
-              <p className={`text-[10px] lg:text-xs font-bold mt-1 lg:mt-2 ${stat.up ? 'text-green-600' : 'text-red-500'}`}>
-                {stat.trend} <span className="hidden lg:inline font-normal text-gray-400 ml-1">{t('dash.lastMonth')}</span>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
+          {stats.map((stat) => (
+            <div
+              key={stat.label}
+              className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm transition-all hover:shadow-md lg:rounded-3xl lg:p-6"
+            >
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-gray-500 lg:mb-2 lg:text-sm">
+                {stat.label}
+              </p>
+              <p className="text-lg font-black text-slate-800 lg:text-3xl">{stat.value}</p>
+              <p className={`mt-1 text-[10px] font-bold lg:mt-2 lg:text-xs ${stat.up ? 'text-green-600' : 'text-red-500'}`}>
+                {stat.trend}
+                <span className="ml-1 hidden font-normal text-gray-400 lg:inline">{t('dash.lastMonth')}</span>
               </p>
             </div>
           ))}
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
-        {/* Left Column: Alerts & Locations - Controlled by 'Products' Permission */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12 lg:gap-8">
         {canViewProducts && (
-          <div className="lg:col-span-4 space-y-6 lg:space-y-8">
-            <div className={`rounded-3xl p-5 lg:p-6 relative overflow-hidden group border ${lowStockCount > 0 ? 'bg-red-50 border-red-100' : 'bg-green-50 border-green-100'}`}>
-              <div className="flex justify-between items-start mb-4">
-                <div className={`flex items-center gap-2 ${lowStockCount > 0 ? 'text-red-700' : 'text-green-700'}`}>
+          <div className="space-y-6 lg:col-span-4 lg:space-y-8">
+            <div className={`relative overflow-hidden rounded-3xl border p-5 lg:p-6 ${summary.lowStockCount > 0 ? 'border-red-100 bg-red-50' : 'border-green-100 bg-green-50'}`}>
+              <div className="mb-4 flex items-start justify-between">
+                <div className={`flex items-center gap-2 ${summary.lowStockCount > 0 ? 'text-red-700' : 'text-green-700'}`}>
                   <span className="material-symbols-outlined font-black">
-                    {lowStockCount > 0 ? 'warning' : 'check_circle'}
+                    {summary.lowStockCount > 0 ? 'warning' : 'check_circle'}
                   </span>
-                  <h2 className="font-extrabold text-lg">{t('dash.alerts')}</h2>
+                  <h2 className="text-lg font-extrabold">{t('dash.alerts')}</h2>
                 </div>
-                <span className={`text-white text-xs font-black px-2 py-1 rounded-full shadow-lg ${lowStockCount > 0 ? 'bg-red-600 shadow-red-200' : 'bg-green-600 shadow-green-200'}`}>
-                  {lowStockCount}
+                <span className={`rounded-full px-2 py-1 text-xs font-black text-white shadow-lg ${summary.lowStockCount > 0 ? 'bg-red-600 shadow-red-200' : 'bg-green-600 shadow-green-200'}`}>
+                  {summary.lowStockCount}
                 </span>
               </div>
-              {lowStockCount > 0 ? (
+
+              {summary.lowStockCount > 0 ? (
                 <>
-                  <p className="text-red-800 text-sm leading-relaxed mb-6 font-medium">
+                  <p className="mb-6 text-sm font-medium leading-relaxed text-red-800">
                     {t('dash.alertsDesc')}
                   </p>
-                  <Link 
+                  <Link
                     to="/alerts"
-                    className="block w-full bg-red-600 text-white py-4 rounded-2xl font-black text-center shadow-xl shadow-red-200 active:scale-[0.98] transition-all hover:bg-red-700"
+                    className="block w-full rounded-2xl bg-red-600 py-4 text-center font-black text-white shadow-xl shadow-red-200 transition-all hover:bg-red-700 active:scale-[0.98]"
                   >
                     {t('dash.action')}
                   </Link>
                 </>
               ) : (
-                <p className="text-green-800 text-sm leading-relaxed font-medium">
+                <p className="text-sm font-medium leading-relaxed text-green-800">
                   All stock levels look healthy. No low stock items at the moment.
                 </p>
               )}
             </div>
 
             <div className="space-y-4">
-              <h2 className="text-lg font-black text-slate-800 px-1">{t('dash.distribution')}</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-4">
-                {locations.map((loc, i) => (
-                  <Link 
-                    key={i} 
-                    to={`/products?location=${loc.id}`}
-                    className="bg-white border border-gray-100 rounded-3xl p-5 shadow-sm hover:shadow-md transition-all cursor-pointer group block"
-                  >
-                    <div className="flex justify-between items-start mb-4">
-                      <div>
-                        <h3 className="font-bold text-slate-800 group-hover:text-primary transition-colors">{loc.name}</h3>
-                        <p className="text-[11px] text-gray-500 font-medium">
-                          {loc.items.toLocaleString()} {t('prod.units')} ? ETB {formatCurrency(loc.value)} ? {loc.isCapacityPending ? 'Loading capacity...' : loc.capUnits > 0 ? `${loc.capUnits.toLocaleString()} cap` : 'Capacity not set'}
-                        </p>
+              <h2 className="px-1 text-lg font-black text-slate-800">{t('dash.distribution')}</h2>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-1">
+                {summary.locations.map((location) => {
+                  const capTone = location.capUnits === 0
+                    ? 'bg-gray-300'
+                    : location.capPercent >= 85
+                      ? 'bg-red-500'
+                      : location.capPercent >= 60
+                        ? 'bg-amber-500'
+                        : 'bg-green-500';
+
+                  return (
+                    <Link
+                      key={location.id}
+                      to={`/products?location=${location.id}`}
+                      className="group block rounded-3xl border border-gray-100 bg-white p-5 shadow-sm transition-all hover:shadow-md"
+                    >
+                      <div className="mb-4 flex items-start justify-between">
+                        <div>
+                          <h3 className="font-bold text-slate-800 transition-colors group-hover:text-primary">
+                            {location.name}
+                          </h3>
+                          <p className="text-[11px] font-medium text-gray-500">
+                            {location.items.toLocaleString()} units • ETB {formatCompactCurrency(location.value)} • {location.capUnits > 0 ? `${location.capUnits.toLocaleString()} cap` : 'Capacity not set'}
+                          </p>
+                        </div>
+                        <span className="material-symbols-outlined text-gray-300 transition-colors group-hover:text-primary">
+                          chevron_right
+                        </span>
                       </div>
-                      <span className="material-symbols-outlined text-gray-300 group-hover:text-primary transition-colors">chevron_right</span>
-                    </div>
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between text-[9px] font-black text-gray-400 uppercase tracking-widest">
-                        <span>{t('dash.stockCapacity')}</span>
-                        <span>{loc.isCapacityPending ? 'Loading...' : loc.capUnits > 0 ? `${loc.capPercent}%` : 'Not set'}</span>
+
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between text-[9px] font-black uppercase tracking-widest text-gray-400">
+                          <span>{t('dash.stockCapacity')}</span>
+                          <span>{location.capUnits > 0 ? `${location.capPercent}%` : 'Not set'}</span>
+                        </div>
+                        <div className="h-1.5 overflow-hidden rounded-full bg-gray-100">
+                          <div
+                            className={`h-full ${capTone} transition-all duration-700`}
+                            style={{ width: `${location.capPercent}%` }}
+                          />
+                        </div>
                       </div>
-                      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                        <div className={`h-full ${loc.capTone} transition-all duration-1000`} style={{ width: `${loc.capPercent}%` }}></div>
-                      </div>
-                    </div>
-                  </Link>
-                ))}
+                    </Link>
+                  );
+                })}
               </div>
             </div>
           </div>
         )}
 
-        {/* Right Column: Recent Orders - Controlled by 'Orders' Permission */}
         {canViewOrders && (
-          <div className="lg:col-span-8 bg-white border border-gray-100 rounded-3xl shadow-sm flex flex-col overflow-hidden">
-            <div className="p-5 lg:p-6 border-b border-gray-50 flex items-center justify-between">
+          <div className="overflow-hidden rounded-3xl border border-gray-100 bg-white shadow-sm lg:col-span-8">
+            <div className="flex items-center justify-between border-b border-gray-50 p-5 lg:p-6">
               <h2 className="text-lg font-black text-slate-800">{t('dash.pulse')}</h2>
-              <Link to="/orders" className="text-primary text-xs lg:text-sm font-black hover:underline uppercase tracking-wider">{t('dash.viewAll')}</Link>
-            </div>
-            
-            {/* Desktop Table */}
-            <div className="hidden lg:block flex-1 overflow-x-auto scrollbar-hide">
-              <table className="w-full text-left">
-                <thead className="bg-gray-50 text-[10px] font-black uppercase text-gray-400 tracking-widest">
-                  <tr>
-                    <th className="px-6 py-4">{t('common.id')}</th>
-                    <th className="px-6 py-4">{t('common.buyer')}</th>
-                    <th className="px-6 py-4">{t('common.revenue')}</th>
-                    <th className="px-6 py-4 text-center">{t('common.status')}</th>
-                    <th className="px-6 py-4"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {recentOrders.map((order) => {
-                    const buyerLabel = getBuyerLabel(order);
-                    return (
-                      <tr key={order.id} className="hover:bg-gray-50 transition-colors group">
-                        <td className="px-6 py-5">
-                          <Link to={`/orders/${order.id}`} className="font-black text-primary hover:underline">#{order.id.split('-').pop()}</Link>
-                        </td>
-                        <td className="px-6 py-5">
-                          <span className="font-bold text-slate-800 leading-none">{buyerLabel}</span>
-                        </td>
-                        <td className="px-6 py-5 font-black text-slate-800">ETB {order.total.toLocaleString()}</td>
-                        <td className="px-6 py-5 text-center">
-                          <span className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest ${order.status === OrderStatus.PENDING ? 'bg-amber-100 text-amber-700' : order.status === OrderStatus.DELIVERED ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
-                            {t(`status.${order.status.toLowerCase()}` as any)}
-                          </span>
-                        </td>
-                        <td className="px-6 py-5 text-right">
-                          <Link to={`/orders/${order.id}`} className="material-symbols-outlined text-gray-300 group-hover:text-primary transition-colors">arrow_forward</Link>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+              <Link to="/orders" className="text-xs font-black uppercase tracking-wider text-primary hover:underline lg:text-sm">
+                {t('dash.viewAll')}
+              </Link>
             </div>
 
-            {/* Mobile Card List */}
-            <div className="lg:hidden divide-y divide-gray-50">
-              {recentOrders.map((order) => {
-                const buyerLabel = getBuyerLabel(order);
-                return (
-                  <Link key={order.id} to={`/orders/${order.id}`} className="p-5 flex items-center justify-between hover:bg-gray-50 active:bg-gray-100 transition-all">
-                    <div className="space-y-1">
-                      <p className="font-black text-primary text-sm">#{order.id.split('-').pop()}</p>
-                      <p className="font-bold text-slate-800 text-base">{buyerLabel}</p>
-                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{order.date}</p>
-                    </div>
-                    <div className="text-right space-y-2">
-                      <p className="font-black text-slate-900">ETB {order.total.toLocaleString()}</p>
-                      <span className={`inline-block px-2 py-1 rounded-md text-[9px] font-black uppercase tracking-widest ${order.status === OrderStatus.PENDING ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
-                        {t(`status.${order.status.toLowerCase()}` as any)}
-                      </span>
-                    </div>
-                  </Link>
-                );
-              })}
-            </div>
+            {summary.recentOrders.length === 0 ? (
+              <div className="p-8 text-center text-sm font-medium text-slate-500">
+                No active orders to show right now.
+              </div>
+            ) : (
+              <>
+                <div className="hidden overflow-x-auto lg:block">
+                  <table className="w-full text-left">
+                    <thead className="bg-gray-50 text-[10px] font-black uppercase tracking-widest text-gray-400">
+                      <tr>
+                        <th className="px-6 py-4">{t('common.id')}</th>
+                        <th className="px-6 py-4">{t('common.buyer')}</th>
+                        <th className="px-6 py-4">{t('common.revenue')}</th>
+                        <th className="px-6 py-4 text-center">{t('common.status')}</th>
+                        <th className="px-6 py-4"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {summary.recentOrders.map((order) => (
+                        <tr key={order.id} className="group transition-colors hover:bg-gray-50">
+                          <td className="px-6 py-5">
+                            <Link to={`/orders/${order.id}`} className="font-black text-primary hover:underline">
+                              #{order.id.split('-').pop()}
+                            </Link>
+                          </td>
+                          <td className="px-6 py-5">
+                            <span className="font-bold leading-none text-slate-800">{order.buyerLabel}</span>
+                          </td>
+                          <td className="px-6 py-5 font-black text-slate-800">
+                            ETB {order.total.toLocaleString()}
+                          </td>
+                          <td className="px-6 py-5 text-center">
+                            <span className={`rounded-lg px-3 py-1.5 text-[10px] font-black uppercase tracking-widest ${getStatusBadgeClasses(order.status)}`}>
+                              {order.status}
+                            </span>
+                          </td>
+                          <td className="px-6 py-5 text-right">
+                            <Link to={`/orders/${order.id}`} className="material-symbols-outlined text-gray-300 transition-colors group-hover:text-primary">
+                              arrow_forward
+                            </Link>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="divide-y divide-gray-50 lg:hidden">
+                  {summary.recentOrders.map((order) => (
+                    <Link
+                      key={order.id}
+                      to={`/orders/${order.id}`}
+                      className="flex items-center justify-between p-5 transition-all hover:bg-gray-50 active:bg-gray-100"
+                    >
+                      <div className="space-y-1">
+                        <p className="text-sm font-black text-primary">#{order.id.split('-').pop()}</p>
+                        <p className="text-base font-bold text-slate-800">{order.buyerLabel}</p>
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">{order.date}</p>
+                      </div>
+                      <div className="space-y-2 text-right">
+                        <p className="font-black text-slate-900">ETB {order.total.toLocaleString()}</p>
+                        <span className={`inline-block rounded-md px-2 py-1 text-[9px] font-black uppercase tracking-widest ${getStatusBadgeClasses(order.status)}`}>
+                          {order.status}
+                        </span>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>
-
     </div>
   );
 };
 
 export default Dashboard;
-
