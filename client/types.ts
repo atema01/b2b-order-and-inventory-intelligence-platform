@@ -58,6 +58,20 @@ export interface Product {
   recommended?: boolean;
   recommendationScore?: number;
   recommendationReasons?: string[];
+  nextExpiryDate?: string | null;
+  batches?: ProductBatch[];
+}
+
+export interface ProductBatch {
+  id: string | number;
+  batchNumber: string;
+  location: StorageLocationId;
+  quantity: number;
+  initialQuantity: number;
+  manufacturingDate?: string | null;
+  expiryDate?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export interface ReturnLog {

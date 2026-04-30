@@ -310,7 +310,7 @@ const BuyerCatalog: React.FC = () => {
         await clearServerDraft();
       }
 
-      await queryClient.invalidateQueries({ queryKey: ['buyer-catalog'] });
+      queryClient.removeQueries({ queryKey: ['buyer-catalog'] });
       await queryClient.invalidateQueries({ queryKey: ['buyer-orders'] });
       await queryClient.invalidateQueries({ queryKey: ['buyer-dashboard'] });
 
@@ -444,7 +444,7 @@ const BuyerCatalog: React.FC = () => {
       draftHydratedRef.current = null;
       setRequestCredit(false);
 
-      await queryClient.invalidateQueries({ queryKey: ['buyer-catalog'] });
+      queryClient.removeQueries({ queryKey: ['buyer-catalog'] });
       await queryClient.invalidateQueries({ queryKey: ['buyer-orders'] });
       await queryClient.invalidateQueries({ queryKey: ['buyer-dashboard'] });
       await queryClient.invalidateQueries({ queryKey: ['buyer-credit-list'] });

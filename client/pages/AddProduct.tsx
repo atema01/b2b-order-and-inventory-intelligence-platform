@@ -23,7 +23,12 @@ const AddProduct: React.FC = () => {
       showRoom: 0
     },
     supplierName: '',
-    supplierPhone: ''
+    supplierPhone: '',
+    initialBatch: {
+      batchNumber: '',
+      manufacturingDate: '',
+      expiryDate: ''
+    }
   });
 
   // Fetch categories from real API
@@ -89,8 +94,15 @@ const AddProduct: React.FC = () => {
         reorderPoint: form.reorderPoint,
         status: initialStatus,
         supplierName: form.supplierName,
-        supplierPhone: form.supplierPhone
+        supplierPhone: form.supplierPhone,
+        initialBatch: form.initialBatch
       };
+
+      if (totalStock > 0 && (!form.initialBatch.batchNumber || !form.initialBatch.manufacturingDate || !form.initialBatch.expiryDate)) {
+        alert('Batch number, manufacturing date, and expiry date are required when adding initial stock.');
+        setIsSubmitting(false);
+        return;
+      }
 
       // Create product via real API
       const response = await fetch('/api/products', {
@@ -309,7 +321,45 @@ const AddProduct: React.FC = () => {
             </div>
           </div>
 
-          {/* Section 4: Initial Inventory */}
+          {/* Section 4: Batch Tracking */}
+          <div className="space-y-8">
+            <div className="flex items-center gap-3 border-b border-gray-50 pb-4">
+              <span className="material-symbols-outlined text-primary text-xl">inventory_2</span>
+              <h3 className="text-sm font-black uppercase text-slate-800 tracking-widest">Initial Batch Tracking</h3>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Batch Number</label>
+                <input
+                  className="w-full bg-gray-50 border-transparent rounded-2xl px-5 py-4 font-bold text-slate-800 focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all shadow-inner"
+                  value={form.initialBatch.batchNumber}
+                  onChange={(e) => setForm({ ...form, initialBatch: { ...form.initialBatch, batchNumber: e.target.value } })}
+                  placeholder="e.g. B-APR-2026-01"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Manufacturing Date</label>
+                <input
+                  type="date"
+                  className="w-full bg-gray-50 border-transparent rounded-2xl px-5 py-4 font-bold text-slate-800 focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all shadow-inner"
+                  value={form.initialBatch.manufacturingDate}
+                  onChange={(e) => setForm({ ...form, initialBatch: { ...form.initialBatch, manufacturingDate: e.target.value } })}
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Expiry Date</label>
+                <input
+                  type="date"
+                  className="w-full bg-gray-50 border-transparent rounded-2xl px-5 py-4 font-bold text-slate-800 focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all shadow-inner"
+                  value={form.initialBatch.expiryDate}
+                  onChange={(e) => setForm({ ...form, initialBatch: { ...form.initialBatch, expiryDate: e.target.value } })}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Section 5: Initial Inventory */}
           <div className="space-y-8">
             <div className="flex items-center gap-3 border-b border-gray-50 pb-4">
               <span className="material-symbols-outlined text-primary text-xl">inventory</span>

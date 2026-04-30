@@ -5,75 +5,18 @@ import { logActivity } from '../utils/activityLog';
 import { runFbProphetForecast, ProphetFrequency } from '../services/fbProphetService';
 import { createNotificationRecord } from '../services/notificationService';
 import { emitCreditChanged, emitInventoryChanged, emitOrderChanged, emitPaymentChanged } from '../services/realtime';
+import {
+  allocateProductQuantity,
+  parseInteger,
+  restoreAllocatedProductQuantity,
+} from '../services/inventoryBatches';
+import { syncOrderAcrossDatabases } from '../services/dbSync';
 
 // Helper function to safely parse numbers
 const parseNumber = (value: any): number => {
   if (typeof value === 'number') return value;
   if (typeof value === 'string') {
     const num = parseFloat(value);
-    return isNaN(num) ? 0 : num;
-  }
-  return 0;
-};
-
-// Helper function to update product status based on stock
-const updateProductStatus = async (productId: string) => {
-  const productResult = await pool.query(
-    `SELECT status, reorder_point, stock_main_warehouse, stock_back_room, stock_show_room 
-     FROM products WHERE id = $1`,
-    [productId]
-  );
-
-  if (productResult.rows.length > 0) {
-    const product = productResult.rows[0];
-
-    const main = parseInteger(product.stock_main_warehouse);
-    const back = parseInteger(product.stock_back_room);
-    const show = parseInteger(product.stock_show_room);
-    const reorderPoint = parseInteger(product.reorder_point);
-    const oldStatus = product.status;
-
-    const totalStock = main + back + show;
-
-    let newStatus = 'In Stock';
-
-    if (totalStock === 0) {
-      newStatus = 'Empty';
-    } else if (totalStock < reorderPoint) {
-      newStatus = 'Low';
-    }
-
-    if (newStatus !== oldStatus) {
-      await pool.query(
-        `UPDATE products 
-         SET status = $1, updated_at = CURRENT_TIMESTAMP 
-         WHERE id = $2`,
-        [newStatus, productId]
-      );
-
-      if (newStatus === 'Low' || newStatus === 'Empty') {
-        await createNotificationRecord(
-          'Stock',
-          'Inventory Alert',
-          `${newStatus} stock warning for product ${productId}.`,
-          'high',
-          'seller',
-          productId
-        );
-        // System logs disabled; only user-initiated logs are recorded
-      }
-    }
-
-    await emitProductInventorySnapshot(productId);
-  }
-};
-
-
-// Helper function to safely parse integers
-const parseInteger = (value: any): number => {
-  if (typeof value === 'number') return Math.floor(value);
-  if (typeof value === 'string') {
-    const num = parseInt(value, 10);
     return isNaN(num) ? 0 : num;
   }
   return 0;
@@ -345,8 +288,8 @@ const buildDemandForecastPayload = (
       const key = getKey(dateObj);
       const qty = productId
         ? order.items
-            .filter((item) => item.productId === productId)
-            .reduce((sum, item) => sum + item.quantity, 0)
+          .filter((item) => item.productId === productId)
+          .reduce((sum, item) => sum + item.quantity, 0)
         : order.items.reduce((sum, item) => sum + item.quantity, 0);
       aggregatedUnits[key] = (aggregatedUnits[key] || 0) + qty;
     });
@@ -485,81 +428,26 @@ const buildDemandForecastPayload = (
 // System logs disabled; user-initiated logs use logActivity
 
 const adjustInventoryForItem = async (
+  orderId: string,
   productId: string,
   quantity: number,
   direction: 'deduct' | 'restore'
 ) => {
-  const productResult = await pool.query(
-    'SELECT stock_main_warehouse, stock_back_room, stock_show_room FROM products WHERE id = $1',
-    [productId]
-  );
-
-  if (productResult.rows.length === 0) {
-    throw new Error(`Product ${productId} not found`);
-  }
-
-  const currentStock = productResult.rows[0];
-  const main = parseInteger(currentStock.stock_main_warehouse);
-  const back = parseInteger(currentStock.stock_back_room);
-  const show = parseInteger(currentStock.stock_show_room);
-
   if (direction === 'deduct') {
-    const totalStock = main + back + show;
-    if (totalStock < quantity) {
-      throw new Error(`Insufficient stock for product ${productId}`);
-    }
-
-    let remainingQty = quantity;
-    let newMainWarehouse = Math.max(0, main - remainingQty);
-    if (main >= remainingQty) {
-      remainingQty = 0;
-    } else {
-      remainingQty -= main;
-    }
-
-    let newBackRoom = back;
-    if (remainingQty > 0) {
-      newBackRoom = Math.max(0, back - remainingQty);
-      if (back >= remainingQty) {
-        remainingQty = 0;
-      } else {
-        remainingQty -= back;
-      }
-    }
-
-    let newShowRoom = show;
-    if (remainingQty > 0) {
-      newShowRoom = Math.max(0, show - remainingQty);
-    }
-
-    await pool.query(
-      `UPDATE products SET 
-        stock_main_warehouse = $1,
-        stock_back_room = $2, 
-        stock_show_room = $3,
-        updated_at = CURRENT_TIMESTAMP
-       WHERE id = $4`,
-      [newMainWarehouse, newBackRoom, newShowRoom, productId]
-    );
+    await allocateProductQuantity(pool, orderId, productId, quantity);
   } else {
-    await pool.query(
-      `UPDATE products SET 
-        stock_main_warehouse = $1,
-        updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2`,
-      [main + quantity, productId]
-    );
+    await restoreAllocatedProductQuantity(pool, orderId, productId, quantity);
   }
-
-  await updateProductStatus(productId);
+  await emitProductInventorySnapshot(productId);
 };
 
 const adjustInventoryForOrderItems = async (
+  orderId: string,
   items: { productId: string; quantity: number }[],
   direction: 'deduct' | 'restore'
 ) => {
   for (const item of items) {
-    await adjustInventoryForItem(item.productId, item.quantity, direction);
+    await adjustInventoryForItem(orderId, item.productId, item.quantity, direction);
   }
 };
 
@@ -634,9 +522,9 @@ export const getAllOrders = async (req: Request, res: Response) => {
 };
 // POST /api/orders
 export const createOrder = async (req: Request, res: Response) => {
-  
+
   const orderData = req.body;
-  
+
   try {
     const orderId = String(orderData.id || '');
     const normalizedStatus = normalizeStatus(orderData.status);
@@ -651,10 +539,6 @@ export const createOrder = async (req: Request, res: Response) => {
     const deductStock = shouldDeductStock(normalizedStatus);
     const taxRate = await getTaxRate();
     const taxValue = Math.max(0, parseNumber(orderData.subtotal) * taxRate);
-    if (deductStock) {
-      await adjustInventoryForOrderItems(orderData.items, 'deduct');
-    }
-
     // Create the order
     const orderResult = await pool.query(
       `INSERT INTO orders (
@@ -688,6 +572,10 @@ export const createOrder = async (req: Request, res: Response) => {
       );
     }
 
+    if (deductStock) {
+      await adjustInventoryForOrderItems(orderId, orderData.items, 'deduct');
+    }
+
     await appendOrderHistory(orderId, {
       status: normalizedStatus,
       date: new Date().toLocaleString(),
@@ -713,6 +601,7 @@ export const createOrder = async (req: Request, res: Response) => {
     );
 
     await pool.query('COMMIT');
+    await syncOrderAcrossDatabases(orderId);
     emitOrderChanged({
       action: 'created',
       orderId,
@@ -721,7 +610,7 @@ export const createOrder = async (req: Request, res: Response) => {
     });
     res.status(201).json(orderResult.rows[0]);
   } catch (err) {
-    await pool.query('ROLLBACK');
+    await pool.query('ROLLBACK').catch(() => { });
     console.error('Create order error:', err);
     let errorMessage = 'Failed to create order';
     if (err instanceof Error) {
@@ -844,6 +733,7 @@ export const checkoutDraftOrderWithPayment = async (req: Request, res: Response)
       ]
     );
 
+    await client.query('DELETE FROM order_items WHERE order_id = $1', [draftId]);
     await client.query('DELETE FROM orders WHERE id = $1', [draftId]);
 
     await logActivity(
@@ -963,14 +853,14 @@ export const checkoutDraftOrderWithCredit = async (req: Request, res: Response) 
         await client.query('ROLLBACK');
         return res.status(400).json({ error: 'Payment method is required for partial credit checkout' });
       }
-    if (paymentAmount <= 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'Payment amount must be greater than zero for partial credit checkout' });
-    }
-    if (!Number.isFinite(paymentAmount)) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ error: 'Payment amount must be a valid number for partial credit checkout' });
-    }
+      if (paymentAmount <= 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Payment amount must be greater than zero for partial credit checkout' });
+      }
+      if (!Number.isFinite(paymentAmount)) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'Payment amount must be a valid number for partial credit checkout' });
+      }
       if (Math.abs(paymentAmount - requiredUpfrontPayment) > 0.01) {
         await client.query('ROLLBACK');
         return res.status(400).json({ error: `Payment amount must match remaining upfront amount (${requiredUpfrontPayment})` });
@@ -1062,6 +952,7 @@ export const checkoutDraftOrderWithCredit = async (req: Request, res: Response) 
       );
     }
 
+    await client.query('DELETE FROM order_items WHERE order_id = $1', [draftId]);
     await client.query('DELETE FROM orders WHERE id = $1', [draftId]);
 
     await logActivity(
@@ -1167,14 +1058,14 @@ export const updateOrder = async (req: Request, res: Response) => {
     // Draft or non-deducting statuses should never keep stock deducted
     if (!shouldDeductStock(newStatus)) {
       if (currentOrder.stock_deducted) {
-        await adjustInventoryForOrderItems(currentItems, 'restore');
+        await adjustInventoryForOrderItems(id, currentItems, 'restore');
         currentOrder.stock_deducted = false;
       }
     } else {
       // Deducting statuses
       if (!currentOrder.stock_deducted) {
         // Transition from non-deducting -> deducting
-        await adjustInventoryForOrderItems(orderData.items, 'deduct');
+        await adjustInventoryForOrderItems(id, orderData.items, 'deduct');
         currentOrder.stock_deducted = true;
       } else {
         // Already deducted, apply per-item deltas
@@ -1188,9 +1079,9 @@ export const updateOrder = async (req: Request, res: Response) => {
         for (const productId of productIds) {
           const delta = (newMap[productId] || 0) - (oldMap[productId] || 0);
           if (delta > 0) {
-            await adjustInventoryForItem(productId, delta, 'deduct');
+            await adjustInventoryForItem(id, productId, delta, 'deduct');
           } else if (delta < 0) {
-            await adjustInventoryForItem(productId, Math.abs(delta), 'restore');
+            await adjustInventoryForItem(id, productId, Math.abs(delta), 'restore');
           }
         }
       }
@@ -1221,7 +1112,7 @@ export const updateOrder = async (req: Request, res: Response) => {
 
     // Delete existing order items and insert new ones
     await pool.query('DELETE FROM order_items WHERE order_id = $1', [id]);
-    
+
     for (const item of orderData.items) {
       await pool.query(
         `INSERT INTO order_items (order_id, product_id, quantity, price_at_order, picked)
@@ -1256,7 +1147,7 @@ export const updateOrder = async (req: Request, res: Response) => {
        WHERE o.id = $1`,
       [id]
     );
-    
+
     // Process the returned order to ensure numeric types
     const processedOrder = {
       id: result.rows[0].id,
@@ -1281,6 +1172,7 @@ export const updateOrder = async (req: Request, res: Response) => {
     };
 
     await pool.query('COMMIT');
+    await syncOrderAcrossDatabases(id);
     emitOrderChanged({
       action: 'updated',
       orderId: id,
@@ -1289,7 +1181,7 @@ export const updateOrder = async (req: Request, res: Response) => {
     });
     res.json(processedOrder);
   } catch (err) {
-    await pool.query('ROLLBACK');
+    await pool.query('ROLLBACK').catch(() => { });
     console.error('Update order error:', err);
     res.status(500).json({ error: 'Failed to update order' });
   }
@@ -1331,9 +1223,9 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
     const items = await getOrderItems(id);
 
     if (shouldDeductStock(normalizedStatus) && !stockDeducted) {
-      await adjustInventoryForOrderItems(items, 'deduct');
+      await adjustInventoryForOrderItems(id, items, 'deduct');
     } else if (shouldRestoreStock(normalizedStatus) && stockDeducted) {
-      await adjustInventoryForOrderItems(items, 'restore');
+      await adjustInventoryForOrderItems(id, items, 'restore');
     }
 
     const newStockDeducted = shouldDeductStock(normalizedStatus)
@@ -1423,6 +1315,7 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
       history: result.rows[0].history || []
     };
 
+    await syncOrderAcrossDatabases(id);
     emitOrderChanged({
       action: 'status-updated',
       orderId: id,
@@ -1438,7 +1331,7 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
 
 export const getOrderById = async (req: Request, res: Response) => {
   const id = getParam(req.params.id);
-  
+
   try {
     // Get order details
     const orderResult = await pool.query(
@@ -1698,7 +1591,7 @@ export const updateOrderItemPicked = async (req: Request, res: Response) => {
         'SELECT status FROM orders WHERE id = $1',
         [orderId]
       );
-      
+
       if (normalizeStatus(orderResult.rows[0].status) === 'Pending') {
         await pool.query(
           'UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',

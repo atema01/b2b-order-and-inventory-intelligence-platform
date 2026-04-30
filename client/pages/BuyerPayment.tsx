@@ -8,6 +8,8 @@ import { useAuth } from '../contexts/AuthContext';
 import LoadingState from '../components/LoadingState';
 import RefreshIndicator from '../components/RefreshIndicator';
 import { buyerQueryKeys, loadBuyerPaymentOrder } from '../services/buyerQueries';
+import {clearCart} from '../services/cartStore'
+import { clear } from 'console';
 
 const BuyerPayment: React.FC = () => {
   const { orderId } = useParams<{ orderId: string }>();
@@ -131,13 +133,14 @@ const BuyerPayment: React.FC = () => {
       await queryClient.invalidateQueries({ queryKey: ['buyer-payments'] });
       await queryClient.invalidateQueries({ queryKey: ['buyer-dashboard'] });
       await queryClient.invalidateQueries({ queryKey: ['buyer-credit-list'] });
+      queryClient.removeQueries({ queryKey: ['buyer-catalog'] });
 
       alert(
         isDraftCheckout
-          ? 'Payment submitted. Your order is now awaiting seller verification.'
+          ? 'Payment submitted. Your order is now awaiting seller verification.' 
           : 'Payment submitted successfully! Waiting for approval.'
       );
-
+clearCart();
       const targetOrderId = isDraftCheckout ? responseData?.orderId : orderId;
       navigate(targetOrderId ? `/orders/${targetOrderId}` : '/orders');
     } catch (err) {

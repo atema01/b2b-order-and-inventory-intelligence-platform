@@ -1,19 +1,24 @@
-// src/controllers/productController.ts
 import { Request, Response } from 'express';
 import pool from '../config/db';
 import { logActivity } from '../utils/activityLog';
 import { createNotificationRecord } from '../services/notificationService';
 import { emitInventoryChanged } from '../services/realtime';
+import {
+  addQuantityToLocation,
+  BatchInput,
+  computeStatus,
+  createProductBatches,
+  deleteProductBatch,
+  deductQuantityFromLocation,
+  getProductBatches,
+  parseInteger,
+  updateProductBatch,
+} from '../services/inventoryBatches';
+import { syncProductAcrossDatabases } from '../services/dbSync';
 
 const getParam = (value: string | string[] | undefined): string => {
   if (Array.isArray(value)) return value[0] ?? '';
   return value ?? '';
-};
-
-const computeStatus = (totalStock: number, reorderPoint: number) => {
-  if (totalStock === 0) return 'Empty';
-  if (totalStock < reorderPoint) return 'Low';
-  return 'In Stock';
 };
 
 const mapProductRow = (row: any) => ({
@@ -33,8 +38,9 @@ const mapProductRow = (row: any) => ({
   stock: {
     mainWarehouse: parseInt(row.stock_main_warehouse.toString(), 10),
     backRoom: parseInt(row.stock_back_room.toString(), 10),
-    showRoom: parseInt(row.stock_show_room.toString(), 10)
-  }
+    showRoom: parseInt(row.stock_show_room.toString(), 10),
+  },
+  nextExpiryDate: row.next_expiry_date || null,
 });
 
 type ProductRecord = ReturnType<typeof mapProductRow>;
@@ -53,8 +59,7 @@ const getDaysSince = (value?: string | null) => {
   if (!value) return Number.POSITIVE_INFINITY;
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return Number.POSITIVE_INFINITY;
-  const diffMs = Date.now() - parsed.getTime();
-  return diffMs / (1000 * 60 * 60 * 24);
+  return (Date.now() - parsed.getTime()) / (1000 * 60 * 60 * 24);
 };
 
 const getBuyerRecommendationContext = async (buyerId: string): Promise<RecommendationContext> => {
@@ -92,7 +97,7 @@ const getBuyerRecommendationContext = async (buyerId: string): Promise<Recommend
       GROUP BY oi.product_id
       `,
       [ACTIVE_RECOMMENDATION_ORDER_STATUSES]
-    )
+    ),
   ]);
 
   buyerHistoryResult.rows.forEach((row: any) => {
@@ -102,9 +107,7 @@ const getBuyerRecommendationContext = async (buyerId: string): Promise<Recommend
     const lastOrdered = String(row.last_ordered || '');
 
     buyerProductUnits.set(productId, units);
-    if (lastOrdered) {
-      buyerProductLastOrdered.set(productId, lastOrdered);
-    }
+    if (lastOrdered) buyerProductLastOrdered.set(productId, lastOrdered);
 
     buyerCategoryUnits.set(category, (buyerCategoryUnits.get(category) || 0) + units);
     const previousCategoryDate = buyerCategoryLastOrdered.get(category);
@@ -122,7 +125,7 @@ const getBuyerRecommendationContext = async (buyerId: string): Promise<Recommend
     buyerProductLastOrdered,
     buyerCategoryUnits,
     buyerCategoryLastOrdered,
-    globalProductUnits
+    globalProductUnits,
   };
 };
 
@@ -152,9 +155,7 @@ const rankProductsForBuyer = (products: ProductRecord[], context: Recommendation
     if (categoryUnits > 0) {
       score += 30 + Math.min(categoryUnits * 2, 24);
       reasons.push('Matches a category this buyer purchases often');
-      if (categoryDays <= 60) {
-        score += 10;
-      }
+      if (categoryDays <= 60) score += 10;
     }
 
     if (globalUnits > 0) {
@@ -162,24 +163,17 @@ const rankProductsForBuyer = (products: ProductRecord[], context: Recommendation
       reasons.push('Popular with buyers overall');
     }
 
-    if (product.status === 'In Stock') {
-      score += 15;
-    } else if (product.status === 'Low') {
-      score += 6;
-    } else if (product.status === 'Empty') {
-      score -= 60;
-    } else if (product.status === 'Discontinued') {
-      score -= 100;
-    }
+    if (product.status === 'In Stock') score += 15;
+    else if (product.status === 'Low') score += 6;
+    else if (product.status === 'Empty') score -= 60;
+    else if (product.status === 'Discontinued') score -= 100;
 
-    if (totalStock <= 0) {
-      score -= 40;
-    }
+    if (totalStock <= 0) score -= 40;
 
     return {
       ...product,
       recommendationScore: score,
-      recommendationReasons: Array.from(new Set(reasons)).slice(0, 3)
+      recommendationReasons: Array.from(new Set(reasons)).slice(0, 3),
     };
   });
 
@@ -199,116 +193,152 @@ const rankProductsForBuyer = (products: ProductRecord[], context: Recommendation
 
   return sorted.map((product) => ({
     ...product,
-    recommended: recommendedIds.has(product.id)
+    recommended: recommendedIds.has(product.id),
   }));
 };
 
-// System logs disabled; user-initiated logs use logActivity
-
-const emitProductInventory = (product: ReturnType<typeof mapProductRow>) => {
+const emitProductInventory = (product: ProductRecord) => {
   emitInventoryChanged({
     productId: product.id,
     status: product.status,
     stock: {
       ...product.stock,
-      total: product.stock.mainWarehouse + product.stock.backRoom + product.stock.showRoom
-    }
+      total: product.stock.mainWarehouse + product.stock.backRoom + product.stock.showRoom,
+    },
   });
 };
 
-// server/src/controllers/productController.ts
-// Add this to productController.ts
+const fetchFullProduct = async (id: string) => {
+  const result = await pool.query(
+    `SELECT
+       p.*,
+       (
+         SELECT MIN(pb.expiry_date)
+         FROM product_batches pb
+         WHERE pb.product_id = p.id
+           AND pb.quantity_available > 0
+           AND pb.expiry_date IS NOT NULL
+       ) AS next_expiry_date
+     FROM products p
+     WHERE p.id = $1`,
+    [id]
+  );
+
+  if (result.rows.length === 0) return null;
+
+  const product = mapProductRow(result.rows[0]);
+  const batches = await getProductBatches(pool, id);
+  return {
+    ...product,
+    batches,
+  };
+};
+
+const getProductListQuery = `
+  SELECT
+    p.*,
+    (
+      SELECT MIN(pb.expiry_date)
+      FROM product_batches pb
+      WHERE pb.product_id = p.id
+        AND pb.quantity_available > 0
+        AND pb.expiry_date IS NOT NULL
+    ) AS next_expiry_date
+  FROM products p
+`;
+
 export const getProductById = async (req: Request, res: Response) => {
   const id = getParam(req.params.id);
   try {
-    const result = await pool.query(
-      `SELECT 
-        id, name, sku, category, brand, description, price,
-        cost_price AS "costPrice",
-        image, reorder_point AS "reorderPoint", status,
-        supplier_name AS "supplierName",
-        supplier_phone AS "supplierPhone",
-        stock_main_warehouse AS "stock.mainWarehouse",
-        stock_back_room AS "stock.backRoom",
-        stock_show_room AS "stock.showRoom"
-       FROM products
-       WHERE id = $1`,
-      [id]
-    );
-
-    if (result.rows.length === 0) {
+    const product = await fetchFullProduct(id);
+    if (!product) {
       return res.status(404).json({ error: 'Product not found' });
     }
-
-    const row = result.rows[0];
-    const product = {
-      id: row.id,
-      name: row.name,
-      sku: row.sku,
-      category: row.category,
-      brand: row.brand,
-      description: row.description,
-      price: parseFloat(row.price.toString()),
-      costPrice: row.costPrice ? parseFloat(row.costPrice.toString()) : undefined,
-      image: row.image,
-      reorderPoint: parseInt(row.reorderPoint.toString()),
-      status: row.status,
-      supplierName: row.supplierName,
-      supplierPhone: row.supplierPhone,
-      stock: {
-        mainWarehouse: parseInt(row['stock.mainWarehouse'].toString()),
-        backRoom: parseInt(row['stock.backRoom'].toString()),
-        showRoom: parseInt(row['stock.showRoom'].toString())
-      }
-    };
-
     res.json(product);
   } catch (err) {
     console.error('Get product error:', err);
     res.status(500).json({ error: 'Failed to fetch product' });
   }
 };
-// POST /api/products
+
 export const createProduct = async (req: Request, res: Response) => {
   const {
-    name, sku, brand, category, description, price, costPrice,
-    image, stock, reorderPoint, supplierName, supplierPhone
+    name,
+    sku,
+    brand,
+    category,
+    description,
+    price,
+    costPrice,
+    image,
+    stock,
+    reorderPoint,
+    supplierName,
+    supplierPhone,
+    initialBatch,
   } = req.body;
 
   try {
     const totalStock = (stock?.mainWarehouse || 0) + (stock?.backRoom || 0) + (stock?.showRoom || 0);
+    if (totalStock > 0 && !initialBatch?.batchNumber) {
+      return res.status(400).json({ error: 'Batch number is required when adding initial stock' });
+    }
+
+    const productId = `P-${Date.now().toString().slice(-6)}`;
     const computedStatus = computeStatus(totalStock, reorderPoint || 0);
 
+    await pool.query('BEGIN');
     const result = await pool.query(
       `INSERT INTO products (
         id, name, sku, category, brand, description, price, cost_price,
         image, reorder_point, status, supplier_name, supplier_phone,
         stock_main_warehouse, stock_back_room, stock_show_room
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 0, 0, 0)
       RETURNING *`,
       [
-        `P-${Date.now().toString().slice(-6)}`,
-        name, sku, category, brand, description, price, costPrice,
-        image, reorderPoint, computedStatus, supplierName, supplierPhone,
-        stock.mainWarehouse, stock.backRoom, stock.showRoom
+        productId,
+        name,
+        sku,
+        category,
+        brand,
+        description,
+        price,
+        costPrice,
+        image,
+        reorderPoint,
+        computedStatus,
+        supplierName,
+        supplierPhone,
       ]
     );
 
-    const product = mapProductRow(result.rows[0]);
-    emitProductInventory(product);
-    res.status(201).json(product);
-    await logActivity(
-      req,
-      'Create Product',
-      'Inventory',
-      `Created product ${result.rows[0].id} (${name}).`
-    );
+    if (totalStock > 0) {
+      await createProductBatches(pool, productId, {
+        batchNumber: String(initialBatch.batchNumber),
+        manufacturingDate: initialBatch.manufacturingDate || null,
+        expiryDate: initialBatch.expiryDate || null,
+        quantities: {
+          mainWarehouse: parseInteger(stock?.mainWarehouse),
+          backRoom: parseInteger(stock?.backRoom),
+          showRoom: parseInteger(stock?.showRoom),
+        },
+      });
+    }
+
+    await pool.query('COMMIT');
+    await syncProductAcrossDatabases(productId);
+
+    const product = await fetchFullProduct(productId);
+    if (product) emitProductInventory(product);
+    res.status(201).json(product || mapProductRow(result.rows[0]));
+    await logActivity(req, 'Create Product', 'Inventory', `Created product ${productId} (${name}).`);
   } catch (err) {
+    await pool.query('ROLLBACK').catch(() => {});
     console.error('Create product error:', err);
-    res.status(500).json({ error: 'Failed to create product' });
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to create product' });
   }
 };
-// Add this function to productController.ts
+
 export const getAllProducts = async (req: Request, res: Response) => {
   try {
     const currentUser = (req as any).user;
@@ -320,55 +350,21 @@ export const getAllProducts = async (req: Request, res: Response) => {
     const shouldPaginateInMemory = shouldRankForBuyer && usePagination;
 
     const result = await pool.query(
-      `
-      SELECT 
-        id, name, sku, category, brand, description, price,
-        cost_price AS "costPrice",
-        image, reorder_point AS "reorderPoint", status,
-        supplier_name AS "supplierName",
-        supplier_phone AS "supplierPhone",
-        stock_main_warehouse AS "stock.mainWarehouse",
-        stock_back_room AS "stock.backRoom", 
-        stock_show_room AS "stock.showRoom"
-      FROM products
-      ORDER BY name
-      ${usePagination && !shouldPaginateInMemory ? 'LIMIT $1 OFFSET $2' : ''}
-      `,
+      `${getProductListQuery}
+       ORDER BY p.name
+       ${usePagination && !shouldPaginateInMemory ? 'LIMIT $1 OFFSET $2' : ''}`,
       usePagination && !shouldPaginateInMemory ? [limitParam, offset] : []
     );
 
-    const products = result.rows.map(row => ({
-      id: row.id,
-      name: row.name,
-      sku: row.sku,
-      category: row.category,
-      brand: row.brand,
-      description: row.description,
-      price: parseFloat(row.price.toString()),
-      costPrice: row.costPrice ? parseFloat(row.costPrice.toString()) : undefined,
-      image: row.image,
-      reorderPoint: parseInt(row.reorderPoint.toString()),
-      status: row.status,
-      supplierName: row.supplierName,
-      supplierPhone: row.supplierPhone,
-      stock: {
-        mainWarehouse: parseInt(row['stock.mainWarehouse'].toString()),
-        backRoom: parseInt(row['stock.backRoom'].toString()),
-        showRoom: parseInt(row['stock.showRoom'].toString())
-      }
-    }));
-
-    const rankedProducts =
-      shouldRankForBuyer
-        ? rankProductsForBuyer(products, await getBuyerRecommendationContext(String(currentUser.userId)))
-        : products;
+    const products = result.rows.map(mapProductRow);
+    const rankedProducts = shouldRankForBuyer
+      ? rankProductsForBuyer(products, await getBuyerRecommendationContext(String(currentUser.userId)))
+      : products;
 
     if (usePagination) {
       const countResult = await pool.query('SELECT COUNT(*)::int AS count FROM products');
       const total = countResult.rows[0]?.count || 0;
-      const paginatedProducts = shouldPaginateInMemory
-        ? rankedProducts.slice(offset, offset + limitParam)
-        : rankedProducts;
+      const paginatedProducts = shouldPaginateInMemory ? rankedProducts.slice(offset, offset + limitParam) : rankedProducts;
       res.json({ data: paginatedProducts, page: pageParam, limit: limitParam, total });
     } else {
       res.json(rankedProducts);
@@ -378,92 +374,172 @@ export const getAllProducts = async (req: Request, res: Response) => {
     res.status(500).json({ error: 'Failed to fetch products' });
   }
 };
-// PUT /api/products/:id
+
 export const updateProduct = async (req: Request, res: Response) => {
   const id = getParam(req.params.id);
   const {
-    name, sku, brand, category, description, price, costPrice,
-    image, stock, reorderPoint, supplierName, supplierPhone
+    name,
+    sku,
+    brand,
+    category,
+    description,
+    price,
+    costPrice,
+    image,
+    reorderPoint,
+    supplierName,
+    supplierPhone,
+    status,
   } = req.body;
 
   try {
-    const totalStock = (stock?.mainWarehouse || 0) + (stock?.backRoom || 0) + (stock?.showRoom || 0);
-    const computedStatus = computeStatus(totalStock, reorderPoint || 0);
-
-    const result = await pool.query(
-      `UPDATE products SET
-        name = $1, sku = $2, category = $3, brand = $4, description = $5,
-        price = $6, cost_price = $7, image = $8, reorder_point = $9,
-        status = $10, supplier_name = $11, supplier_phone = $12,
-        stock_main_warehouse = $13, stock_back_room = $14, stock_show_room = $15,
-        updated_at = CURRENT_TIMESTAMP
-       WHERE id = $16
-       RETURNING *`,
-      [
-        name, sku, category, brand, description, price, costPrice,
-        image, reorderPoint, computedStatus, supplierName, supplierPhone,
-        stock.mainWarehouse, stock.backRoom, stock.showRoom,
-        id
-      ]
+    const currentProductResult = await pool.query(
+      'SELECT stock_main_warehouse, stock_back_room, stock_show_room FROM products WHERE id = $1',
+      [id]
     );
-
-    if (result.rows.length === 0) {
+    if (currentProductResult.rows.length === 0) {
       return res.status(404).json({ error: 'Product not found' });
     }
 
-    const product = mapProductRow(result.rows[0]);
-    emitProductInventory(product);
-    res.json(product);
-    await logActivity(
-      req,
-      'Update Product',
-      'Inventory',
-      `Updated product ${id} (${name}).`
+    const current = currentProductResult.rows[0];
+    const totalStock =
+      parseInteger(current.stock_main_warehouse) +
+      parseInteger(current.stock_back_room) +
+      parseInteger(current.stock_show_room);
+    const computedStatus =
+      status === 'Discontinued' ? 'Discontinued' : computeStatus(totalStock, parseInteger(reorderPoint));
+
+    const result = await pool.query(
+      `UPDATE products SET
+         name = $1, sku = $2, category = $3, brand = $4, description = $5,
+         price = $6, cost_price = $7, image = $8, reorder_point = $9,
+         status = $10, supplier_name = $11, supplier_phone = $12,
+         updated_at = CURRENT_TIMESTAMP
+       WHERE id = $13
+       RETURNING *`,
+      [name, sku, category, brand, description, price, costPrice, image, reorderPoint, computedStatus, supplierName, supplierPhone, id]
     );
+
+    await syncProductAcrossDatabases(id);
+
+    const product = await fetchFullProduct(id);
+    if (product) emitProductInventory(product);
+    res.json(product || mapProductRow(result.rows[0]));
+    await logActivity(req, 'Update Product', 'Inventory', `Updated product ${id} (${name}).`);
   } catch (err) {
     console.error('Update product error:', err);
     res.status(500).json({ error: 'Failed to update product' });
   }
 };
 
-// DELETE /api/products/:id
 export const deleteProduct = async (req: Request, res: Response) => {
   const id = getParam(req.params.id);
 
   try {
-    // Check if product exists
-    const checkResult = await pool.query(
-      'SELECT id FROM products WHERE id = $1',
-      [id]
-    );
-
+    const checkResult = await pool.query('SELECT id FROM products WHERE id = $1', [id]);
     if (checkResult.rows.length === 0) {
       return res.status(404).json({ error: 'Product not found' });
     }
 
-    // Delete the product
-    const result = await pool.query(
-      'DELETE FROM products WHERE id = $1',
-      [id]
-    );
+    await pool.query('DELETE FROM products WHERE id = $1', [id]);
+    await syncProductAcrossDatabases(id);
 
     res.json({ message: 'Product deleted successfully' });
-    await logActivity(
-      req,
-      'Delete Product',
-      'Inventory',
-      `Deleted product ${id}.`
-    );
+    await logActivity(req, 'Delete Product', 'Inventory', `Deleted product ${id}.`);
   } catch (err) {
     console.error('Delete product error:', err);
     res.status(500).json({ error: 'Failed to delete product' });
   }
 };
 
-// POST /api/products/:id/adjust-stock
+export const addProductBatch = async (req: Request, res: Response) => {
+  const id = getParam(req.params.id);
+  const { batchNumber, manufacturingDate, expiryDate, quantities } = req.body || {};
+
+  try {
+    const existing = await pool.query('SELECT id FROM products WHERE id = $1', [id]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    await pool.query('BEGIN');
+    await createProductBatches(pool, id, {
+      batchNumber,
+      manufacturingDate,
+      expiryDate,
+      quantities: quantities || {},
+    } as BatchInput);
+    await pool.query('COMMIT');
+
+    await syncProductAcrossDatabases(id);
+
+    const product = await fetchFullProduct(id);
+    if (product) emitProductInventory(product);
+    res.status(201).json(product);
+    await logActivity(req, 'Add Product Batch', 'Inventory', `Added batch ${batchNumber} to product ${id}.`);
+  } catch (err) {
+    await pool.query('ROLLBACK').catch(() => {});
+    console.error('Add product batch error:', err);
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to add product batch' });
+  }
+};
+
+export const editProductBatch = async (req: Request, res: Response) => {
+  const id = getParam(req.params.id);
+  const batchId = parseInteger(req.params.batchId);
+  const { batchNumber, manufacturingDate, expiryDate, location, quantity } = req.body || {};
+
+  if (!['mainWarehouse', 'backRoom', 'showRoom'].includes(location)) {
+    return res.status(400).json({ error: 'Invalid location' });
+  }
+
+  try {
+    await pool.query('BEGIN');
+    await updateProductBatch(pool, id, batchId, {
+      batchNumber,
+      manufacturingDate,
+      expiryDate,
+      location,
+      quantity,
+    });
+    await pool.query('COMMIT');
+
+    await syncProductAcrossDatabases(id);
+    const product = await fetchFullProduct(id);
+    if (product) emitProductInventory(product);
+    res.json(product);
+    await logActivity(req, 'Edit Product Batch', 'Inventory', `Updated batch ${batchId} for product ${id}.`);
+  } catch (err) {
+    await pool.query('ROLLBACK').catch(() => {});
+    console.error('Edit product batch error:', err);
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to update product batch' });
+  }
+};
+
+export const removeProductBatch = async (req: Request, res: Response) => {
+  const id = getParam(req.params.id);
+  const batchId = parseInteger(req.params.batchId);
+
+  try {
+    await pool.query('BEGIN');
+    await deleteProductBatch(pool, id, batchId);
+    await pool.query('COMMIT');
+
+    await syncProductAcrossDatabases(id);
+    const product = await fetchFullProduct(id);
+    if (product) emitProductInventory(product);
+    res.json(product);
+    await logActivity(req, 'Delete Product Batch', 'Inventory', `Deleted batch ${batchId} from product ${id}.`);
+  } catch (err) {
+    await pool.query('ROLLBACK').catch(() => {});
+    console.error('Delete product batch error:', err);
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to delete product batch' });
+  }
+};
+
 export const adjustProductStock = async (req: Request, res: Response) => {
   const id = getParam(req.params.id);
-  const { location, quantity, reason } = req.body;
+  const { location, quantity, reason, batchNumber, manufacturingDate, expiryDate } = req.body;
 
   if (!['mainWarehouse', 'backRoom', 'showRoom'].includes(location)) {
     return res.status(400).json({ error: 'Invalid location' });
@@ -474,7 +550,7 @@ export const adjustProductStock = async (req: Request, res: Response) => {
 
   try {
     const productResult = await pool.query(
-      `SELECT stock_main_warehouse, stock_back_room, stock_show_room, reorder_point, status
+      `SELECT reorder_point, status
        FROM products WHERE id = $1`,
       [id]
     );
@@ -483,28 +559,21 @@ export const adjustProductStock = async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Product not found' });
     }
 
-    const current = productResult.rows[0];
-    const main = parseInt(current.stock_main_warehouse.toString(), 10);
-    const back = parseInt(current.stock_back_room.toString(), 10);
-    const show = parseInt(current.stock_show_room.toString(), 10);
+    let updatedRow: any;
+    await pool.query('BEGIN');
+    if (quantity > 0) {
+      updatedRow = await addQuantityToLocation(pool, id, location, quantity, {
+        batchNumber,
+        manufacturingDate,
+        expiryDate,
+      });
+    } else {
+      updatedRow = await deductQuantityFromLocation(pool, id, location, Math.abs(quantity));
+    }
+    await pool.query('COMMIT');
 
-    const newMain = location === 'mainWarehouse' ? main + quantity : main;
-    const newBack = location === 'backRoom' ? back + quantity : back;
-    const newShow = location === 'showRoom' ? show + quantity : show;
-
-    const totalStock = newMain + newBack + newShow;
-    const oldStatus = current.status;
-    const newStatus = computeStatus(totalStock, parseInt(current.reorder_point.toString(), 10));
-
-    const updateResult = await pool.query(
-      `UPDATE products SET
-        stock_main_warehouse = $1, stock_back_room = $2, stock_show_room = $3,
-        status = $4, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $5
-       RETURNING *`,
-      [newMain, newBack, newShow, newStatus, id]
-    );
-
+    const newStatus = updatedRow.status;
+    const oldStatus = productResult.rows[0].status;
     if (newStatus !== oldStatus && (newStatus === 'Low' || newStatus === 'Empty')) {
       await createNotificationRecord(
         'Stock',
@@ -514,14 +583,13 @@ export const adjustProductStock = async (req: Request, res: Response) => {
         'seller',
         id
       );
-      // System logs disabled; only user-initiated logs are recorded
-    } else {
-      // System logs disabled; only user-initiated logs are recorded
     }
 
-    const product = mapProductRow(updateResult.rows[0]);
-    emitProductInventory(product);
-    res.json(product);
+    await syncProductAcrossDatabases(id);
+
+    const fullProduct = await fetchFullProduct(id);
+    if (fullProduct) emitProductInventory(fullProduct);
+    res.json(fullProduct || { ...mapProductRow(updatedRow), batches: [] });
     await logActivity(
       req,
       'Adjust Stock',
@@ -529,7 +597,8 @@ export const adjustProductStock = async (req: Request, res: Response) => {
       `Adjusted stock for product ${id} at ${location} by ${quantity}. Reason: ${reason || 'N/A'}.`
     );
   } catch (err) {
+    await pool.query('ROLLBACK').catch(() => {});
     console.error('Adjust stock error:', err);
-    res.status(500).json({ error: 'Failed to adjust stock' });
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to adjust stock' });
   }
 };

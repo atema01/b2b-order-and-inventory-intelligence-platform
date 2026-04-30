@@ -19,6 +19,24 @@ const ProductDetails: React.FC = () => {
   const [editForm, setEditForm] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshToken, setRefreshToken] = useState(0);
+  const [batchForm, setBatchForm] = useState({
+    batchNumber: '',
+    manufacturingDate: '',
+    expiryDate: '',
+    quantities: {
+      mainWarehouse: 0,
+      backRoom: 0,
+      showRoom: 0
+    }
+  });
+  const [editingBatchId, setEditingBatchId] = useState<string | number | null>(null);
+  const [editingBatchForm, setEditingBatchForm] = useState({
+    batchNumber: '',
+    manufacturingDate: '',
+    expiryDate: '',
+    location: 'mainWarehouse' as StorageLocationId,
+    quantity: 0
+  });
 
   useEffect(() => {
     const fetchProductDetails = async () => {
@@ -85,17 +103,6 @@ const ProductDetails: React.FC = () => {
     setEditForm(prev => prev ? { ...prev, [field]: value } : null);
   };
 
-  const handleStockChange = (location: keyof Product['stock'], value: string) => {
-    const num = parseInt(value) || 0;
-    setEditForm(prev => {
-      if (!prev) return null;
-      return {
-        ...prev,
-        stock: { ...prev.stock, [location]: num }
-      };
-    });
-  };
-
   const handleImageClick = () => {
     if (isEditing) fileInputRef.current?.click();
   };
@@ -113,14 +120,7 @@ const ProductDetails: React.FC = () => {
 
 const handleSave = async () => {
   if (editForm) {
-    // Re-calculate status based on stock
-    const totalStock = storageLocations.reduce((acc, loc) => acc + (editForm.stock[loc.id as StorageLocationId] || 0), 0);
-    let newStatus = editForm.status;
-    if (totalStock === 0) newStatus = 'Empty';
-    else if (totalStock < editForm.reorderPoint) newStatus = 'Low';
-    else if (editForm.status !== 'Discontinued') newStatus = 'In Stock';
-
-    const updated = { ...editForm, status: newStatus };
+    const updated = { ...editForm };
     
     try {
       const response = await fetch(`/api/products/${product.id}`, {
@@ -155,6 +155,104 @@ const handleSave = async () => {
     }
   }
 };
+
+  const handleAddBatch = async () => {
+    if (!product) return;
+    const totalIncoming = storageLocations.reduce((sum, loc) => sum + (batchForm.quantities[loc.id as StorageLocationId] || 0), 0);
+    if (totalIncoming <= 0) {
+      alert('Enter at least one quantity for the new batch.');
+      return;
+    }
+    if (!batchForm.batchNumber || !batchForm.manufacturingDate || !batchForm.expiryDate) {
+      alert('Batch number, manufacturing date, and expiry date are required.');
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/products/${product.id}/batches`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(batchForm)
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        alert(errorData.error || 'Failed to add batch');
+        return;
+      }
+
+      const updatedProduct = await response.json();
+      setProduct(updatedProduct);
+      setEditForm(updatedProduct);
+      setBatchForm({
+        batchNumber: '',
+        manufacturingDate: '',
+        expiryDate: '',
+        quantities: { mainWarehouse: 0, backRoom: 0, showRoom: 0 }
+      });
+    } catch (err) {
+      console.error('Add batch error:', err);
+      alert('Network error. Please try again.');
+    }
+  };
+
+  const startEditingBatch = (batch: NonNullable<Product['batches']>[number]) => {
+    setEditingBatchId(batch.id);
+    setEditingBatchForm({
+      batchNumber: batch.batchNumber,
+      manufacturingDate: batch.manufacturingDate || '',
+      expiryDate: batch.expiryDate || '',
+      location: batch.location,
+      quantity: batch.quantity
+    });
+  };
+
+  const handleUpdateBatch = async () => {
+    if (!product || editingBatchId == null) return;
+    try {
+      const response = await fetch(`/api/products/${product.id}/batches/${editingBatchId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(editingBatchForm)
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        alert(data.error || 'Failed to update batch');
+        return;
+      }
+      setProduct(data);
+      setEditForm(data);
+      setEditingBatchId(null);
+    } catch (err) {
+      console.error('Update batch error:', err);
+      alert('Network error. Please try again.');
+    }
+  };
+
+  const handleDeleteBatch = async (batchId: string | number) => {
+    if (!product || !window.confirm('Delete this batch?')) return;
+    try {
+      const response = await fetch(`/api/products/${product.id}/batches/${batchId}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        alert(data.error || 'Failed to delete batch');
+        return;
+      }
+      setProduct(data);
+      setEditForm(data);
+      if (editingBatchId === batchId) {
+        setEditingBatchId(null);
+      }
+    } catch (err) {
+      console.error('Delete batch error:', err);
+      alert('Network error. Please try again.');
+    }
+  };
 
   const handleCancel = () => {
     setEditForm(product);
@@ -239,6 +337,10 @@ const handleSave = async () => {
                         <span className="flex size-2 rounded-full bg-green-500 animate-pulse" title="Live Update"></span>
                     </div>
                  </div>
+                 <div className="text-center p-3 bg-gray-50 rounded-2xl">
+                    <p className="text-[9px] font-black text-gray-400 uppercase mb-1">Next Expiry</p>
+                    <p className="text-sm font-black text-slate-800">{product.nextExpiryDate ? new Date(product.nextExpiryDate).toLocaleDateString() : 'Not Set'}</p>
+                 </div>
               </div>
             </div>
           </div>
@@ -252,20 +354,13 @@ const handleSave = async () => {
               {storageLocations.map((loc) => (
                 <div key={loc.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-xl transition-all">
                    <p className="text-[10px] font-black text-gray-400 uppercase">{loc.name}</p>
-                   {isEditing ? (
-                     <input 
-                      type="number"
-                      className="w-20 bg-white border-gray-200 rounded-lg px-2 py-1 font-black text-right text-sm focus:ring-primary"
-                      value={editForm.stock[loc.id as StorageLocationId]}
-                      onChange={(e) => handleStockChange(loc.id as StorageLocationId, e.target.value)}
-                     />
-                   ) : (
-                     <p className="text-sm font-black text-slate-800 transition-colors">{product.stock[loc.id as StorageLocationId]}</p>
-                   )}
+                   <p className="text-sm font-black text-slate-800 transition-colors">{product.stock[loc.id as StorageLocationId]}</p>
                 </div>
               ))}
             </div>
+            <p className="mt-4 text-xs font-medium text-gray-500">Stock totals are now derived from tracked batches. Use the batch section to add inventory.</p>
           </section>
+
         </div>
 
         {/* Right: Product Attributes Form */}
@@ -422,6 +517,181 @@ const handleSave = async () => {
           </section>
         </div>
       </div>
+
+      <section className="mt-6 bg-white rounded-[32px] p-6 lg:p-8 border border-gray-100 shadow-sm">
+        <div className="flex items-center gap-3 border-b border-gray-50 pb-4 mb-6">
+          <span className="material-symbols-outlined text-primary text-xl">event</span>
+          <h2 className="text-lg font-black text-slate-800">Batch Tracking</h2>
+        </div>
+
+        <div className="grid grid-cols-1 xl:grid-cols-[1.2fr,0.8fr] gap-6">
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <input
+                className="w-full bg-gray-50 border-transparent rounded-2xl px-5 py-3.5 font-bold text-slate-800 focus:ring-primary focus:bg-white transition-all shadow-inner"
+                value={batchForm.batchNumber}
+                onChange={(e) => setBatchForm((prev) => ({ ...prev, batchNumber: e.target.value }))}
+                placeholder="Batch Number"
+              />
+              <input
+                type="date"
+                className="w-full bg-gray-50 border-transparent rounded-2xl px-5 py-3.5 font-bold text-slate-800 focus:ring-primary focus:bg-white transition-all shadow-inner"
+                value={batchForm.manufacturingDate}
+                onChange={(e) => setBatchForm((prev) => ({ ...prev, manufacturingDate: e.target.value }))}
+              />
+              <input
+                type="date"
+                className="w-full bg-gray-50 border-transparent rounded-2xl px-5 py-3.5 font-bold text-slate-800 focus:ring-primary focus:bg-white transition-all shadow-inner"
+                value={batchForm.expiryDate}
+                onChange={(e) => setBatchForm((prev) => ({ ...prev, expiryDate: e.target.value }))}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {storageLocations.map((loc) => (
+                <input
+                  key={loc.id}
+                  type="number"
+                  className="w-full bg-gray-50 border-transparent rounded-2xl px-5 py-3.5 font-bold text-slate-800 focus:ring-primary focus:bg-white transition-all shadow-inner"
+                  value={batchForm.quantities[loc.id as StorageLocationId]}
+                  onChange={(e) =>
+                    setBatchForm((prev) => ({
+                      ...prev,
+                      quantities: {
+                        ...prev.quantities,
+                        [loc.id]: parseInt(e.target.value) || 0
+                      }
+                    }))
+                  }
+                  placeholder={`${loc.name} Qty`}
+                />
+              ))}
+            </div>
+
+            <button
+              onClick={handleAddBatch}
+              className="w-full md:w-auto min-w-[220px] py-3.5 px-6 rounded-2xl bg-primary text-white font-black text-xs uppercase tracking-widest shadow-xl shadow-primary/20"
+            >
+              Add Batch
+            </button>
+          </div>
+
+          <div className="bg-gray-50 rounded-[28px] p-5 border border-gray-100">
+            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-4">Current Batch Ledger</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-2 gap-3">
+              {storageLocations.map((loc) => (
+                <div key={loc.id} className="bg-white rounded-2xl p-4 border border-gray-100">
+                  <p className="text-[10px] font-black uppercase text-gray-400">{loc.name}</p>
+                  <p className="mt-2 text-xl font-black text-slate-800">{product.stock[loc.id as StorageLocationId]}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 space-y-3">
+          {(product.batches || []).length > 0 ? (
+            product.batches!.map((batch) => (
+              <div key={batch.id} className="p-4 bg-gray-50 rounded-2xl space-y-4">
+                {editingBatchId === batch.id ? (
+                  <>
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                      <input
+                        className="bg-white border border-gray-100 rounded-xl px-4 py-3 font-bold text-slate-800"
+                        value={editingBatchForm.batchNumber}
+                        onChange={(e) => setEditingBatchForm((prev) => ({ ...prev, batchNumber: e.target.value }))}
+                        placeholder="Batch Number"
+                      />
+                      <select
+                        className="bg-white border border-gray-100 rounded-xl px-4 py-3 font-bold text-slate-800"
+                        value={editingBatchForm.location}
+                        onChange={(e) => setEditingBatchForm((prev) => ({ ...prev, location: e.target.value as StorageLocationId }))}
+                      >
+                        {storageLocations.map((loc) => (
+                          <option key={loc.id} value={loc.id}>{loc.name}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        className="bg-white border border-gray-100 rounded-xl px-4 py-3 font-bold text-slate-800"
+                        value={editingBatchForm.quantity}
+                        onChange={(e) => setEditingBatchForm((prev) => ({ ...prev, quantity: parseInt(e.target.value) || 0 }))}
+                      />
+                      <input
+                        type="date"
+                        className="bg-white border border-gray-100 rounded-xl px-4 py-3 font-bold text-slate-800"
+                        value={editingBatchForm.manufacturingDate}
+                        onChange={(e) => setEditingBatchForm((prev) => ({ ...prev, manufacturingDate: e.target.value }))}
+                      />
+                      <input
+                        type="date"
+                        className="bg-white border border-gray-100 rounded-xl px-4 py-3 font-bold text-slate-800"
+                        value={editingBatchForm.expiryDate}
+                        onChange={(e) => setEditingBatchForm((prev) => ({ ...prev, expiryDate: e.target.value }))}
+                      />
+                    </div>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={handleUpdateBatch}
+                        className="px-5 py-3 rounded-xl bg-primary text-white font-black text-xs uppercase tracking-widest"
+                      >
+                        Save Batch
+                      </button>
+                      <button
+                        onClick={() => setEditingBatchId(null)}
+                        className="px-5 py-3 rounded-xl bg-white border border-gray-200 text-slate-600 font-black text-xs uppercase tracking-widest"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-[1fr,1fr,0.6fr,1fr,1fr,auto] gap-3 items-start">
+                    <div>
+                      <p className="text-[10px] font-black uppercase text-gray-400">Batch</p>
+                      <p className="font-black text-slate-800">{batch.batchNumber}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-black uppercase text-gray-400">Location</p>
+                      <p className="font-bold text-slate-700">{storageLocations.find((loc) => loc.id === batch.location)?.name || batch.location}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-black uppercase text-gray-400">Qty</p>
+                      <p className="font-bold text-slate-700">{batch.quantity}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-black uppercase text-gray-400">Mfg</p>
+                      <p className="font-bold text-slate-700">{batch.manufacturingDate ? new Date(batch.manufacturingDate).toLocaleDateString() : 'Not Set'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-black uppercase text-gray-400">Expiry</p>
+                      <p className="font-bold text-slate-700">{batch.expiryDate ? new Date(batch.expiryDate).toLocaleDateString() : 'Not Set'}</p>
+                    </div>
+                    <div className="flex gap-2 md:justify-end">
+                      <button
+                        onClick={() => startEditingBatch(batch)}
+                        className="size-10 rounded-xl bg-white border border-gray-200 text-slate-700 flex items-center justify-center"
+                        title="Edit batch"
+                      >
+                        <span className="material-symbols-outlined text-base">edit</span>
+                      </button>
+                      <button
+                        onClick={() => handleDeleteBatch(batch.id)}
+                        className="size-10 rounded-xl bg-red-50 border border-red-100 text-red-600 flex items-center justify-center"
+                        title="Delete batch"
+                      >
+                        <span className="material-symbols-outlined text-base">delete</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))
+          ) : (
+            <div className="p-4 bg-gray-50 rounded-2xl text-sm font-medium text-gray-500">No batches recorded yet.</div>
+          )}
+        </div>
+      </section>
 
       {/* Floating StickyFooter Actions */}
       <footer className="fixed bottom-0 left-0 lg:left-64 right-0 bg-white/95 backdrop-blur-xl border-t border-gray-200 px-4 py-4 z-40 shadow-2xl">

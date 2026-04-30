@@ -7,25 +7,32 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 const migrationsDir = path.resolve(__dirname, '../src/migrations');
 
-const buildClientConfig = () => {
+const buildTargets = () => {
   const isProduction = process.env.NODE_ENV === 'production';
-  const isDevelopment = process.env.NODE_ENV === 'development';
-  const shouldUseDatabaseUrl = !isDevelopment && Boolean(process.env.DATABASE_URL);
+  const targets = [
+    {
+      name: 'local-postgres',
+      config: {
+        user: process.env.DB_USER || 'postgres',
+        host: process.env.DB_HOST || 'localhost',
+        database: process.env.DB_NAME || 'b2b_platform',
+        password: process.env.DB_PASSWORD || 'postgres',
+        port: parseInt(process.env.DB_PORT || '5432', 10)
+      }
+    }
+  ];
 
-  if (shouldUseDatabaseUrl) {
-    return {
-      connectionString: process.env.DATABASE_URL,
-      ssl: isProduction ? { rejectUnauthorized: false } : false
-    };
+  if (process.env.DATABASE_URL) {
+    targets.push({
+      name: 'supabase',
+      config: {
+        connectionString: process.env.DATABASE_URL,
+        ssl: isProduction ? { rejectUnauthorized: false } : false
+      }
+    });
   }
 
-  return {
-    user: process.env.DB_USER || 'postgres',
-    host: process.env.DB_HOST || 'localhost',
-    database: process.env.DB_NAME || 'b2b_platform',
-    password: process.env.DB_PASSWORD || 'postgres',
-    port: parseInt(process.env.DB_PORT || '5432', 10)
-  };
+  return targets;
 };
 
 const getMigrationFiles = () =>
@@ -70,12 +77,12 @@ const applyMigration = async (client, file) => {
   }
 };
 
-const run = async () => {
-  const client = new Client(buildClientConfig());
+const runForTarget = async ({ name, config }) => {
+  const client = new Client(config);
 
   try {
     await client.connect();
-    console.log('Connected to database');
+    console.log(`Connected to ${name}`);
 
     await ensureMigrationTable(client);
 
@@ -84,21 +91,29 @@ const run = async () => {
     const pendingMigrations = migrationFiles.filter((file) => !appliedMigrations.has(file));
 
     if (pendingMigrations.length === 0) {
-      console.log('No pending migrations. Database is up to date.');
+      console.log(`[${name}] No pending migrations. Database is up to date.`);
       return;
     }
 
-    console.log(`Found ${pendingMigrations.length} pending migration(s).`);
+    console.log(`[${name}] Found ${pendingMigrations.length} pending migration(s).`);
     for (const file of pendingMigrations) {
       await applyMigration(client, file);
     }
 
-    console.log('All pending migrations applied successfully.');
+    console.log(`[${name}] All pending migrations applied successfully.`);
+  } finally {
+    await client.end().catch(() => {});
+  }
+};
+
+const run = async () => {
+  try {
+    for (const target of buildTargets()) {
+      await runForTarget(target);
+    }
   } catch (error) {
     console.error(error.message || error);
     process.exitCode = 1;
-  } finally {
-    await client.end().catch(() => {});
   }
 };
 

@@ -1,6 +1,6 @@
 import pool from '../config/db';
 import { emitNotificationChanged } from './realtime';
-
+import { sendEmailNotification } from './emailService';
 export const createNotificationRecord = async (
   type: string,
   title: string,
@@ -9,6 +9,7 @@ export const createNotificationRecord = async (
   recipientId: string,
   relatedId?: string
 ) => {
+  console.log("email was initiated");
   const result = await pool.query(
     `INSERT INTO notifications (type, title, message, time, is_read, severity, recipient_id, related_id)
      VALUES ($1, $2, $3, $4, false, $5, $6, $7)
@@ -22,6 +23,25 @@ export const createNotificationRecord = async (
     notificationId: notification.id,
     notification
   });
-
+  (async () => {
+    try {
+      let emailAddress = '';
+      if (recipientId === 'seller') {
+        emailAddress = process.env.SELLER_EMAIL || '';
+      } else {
+        const userResult = await pool.query('SELECT email FROM users WHERE id = $1', [recipientId]);
+        if (userResult.rows.length > 0) {
+          emailAddress = userResult.rows[0].email;
+        }
+      }
+      if (emailAddress) {
+        const subject = `[B2B Updates] ${title}`;
+        await sendEmailNotification(emailAddress, subject, message);
+      }
+    } catch (e) {
+      console.error("Could not send email for notification", e);
+    }
+  })();
   return notification;
 };
+

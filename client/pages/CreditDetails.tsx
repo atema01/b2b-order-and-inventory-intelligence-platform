@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Buyer, CreditRequest, Order, Payment } from '../types';
+import { Buyer, CreditRequest, Order, OrderStatus, Payment } from '../types';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
 
@@ -14,6 +14,7 @@ const CreditDetails: React.FC = () => {
   const [order, setOrder] = useState<Order | null>(null);
   const [approvedAmount, setApprovedAmount] = useState<number>(0);
   const [repaymentPayments, setRepaymentPayments] = useState<Payment[]>([]);
+  const [paymentReliabilityScore, setPaymentReliabilityScore] = useState<number | null>(null);
   const [selectedStatus, setSelectedStatus] = useState<CreditRequest['status']>('Pending');
   const [isEditingStatus, setIsEditingStatus] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
@@ -42,10 +43,12 @@ const CreditDetails: React.FC = () => {
         setApprovedAmount(reqData.approvedAmount || reqData.amount);
         setSelectedStatus(reqData.status);
 
-        const [buyerRes, orderRes, repaymentsRes] = await Promise.all([
+        const [buyerRes, orderRes, repaymentsRes, ordersRes, paymentsRes] = await Promise.all([
           fetch('/api/buyers', { credentials: 'include' }),
           reqData.orderId ? fetch(`/api/orders/${reqData.orderId}`, { credentials: 'include' }) : Promise.resolve(null),
-          fetch(`/api/payments?creditRequestId=${reqData.id}`, { credentials: 'include' })
+          fetch(`/api/payments?creditRequestId=${reqData.id}`, { credentials: 'include' }),
+          fetch('/api/orders', { credentials: 'include' }),
+          fetch('/api/payments', { credentials: 'include' })
         ]);
 
         if (!isMounted) return;
@@ -68,6 +71,43 @@ const CreditDetails: React.FC = () => {
           setRepaymentPayments(Array.isArray(repaymentData) ? repaymentData : []);
         } else {
           setRepaymentPayments([]);
+        }
+
+        if (ordersRes.ok && paymentsRes.ok) {
+          const allOrdersData: Order[] = await ordersRes.json();
+          const allPaymentsData: Payment[] = await paymentsRes.json();
+          const buyerOrders = (Array.isArray(allOrdersData) ? allOrdersData : [])
+            .filter((entry) =>
+              entry.buyerId === reqData.buyerId &&
+              ![OrderStatus.DRAFT, OrderStatus.CANCELLED, OrderStatus.DELETED].includes(entry.status)
+            )
+            .map((entry) => ({ ...entry, parsedDate: new Date(entry.date) }))
+            .filter((entry) => !isNaN(entry.parsedDate.getTime()));
+          const paymentsWithDates = (Array.isArray(allPaymentsData) ? allPaymentsData : [])
+            .filter((entry) => entry.buyerId === reqData.buyerId)
+            .map((entry) => ({ ...entry, parsedDate: new Date(entry.dateTime) }))
+            .filter((entry) => !isNaN(entry.parsedDate.getTime()));
+
+          const lagHours = buyerOrders
+            .map((entry) => {
+              const firstProof = paymentsWithDates
+                .filter((payment) => payment.orderId === entry.id && payment.parsedDate >= entry.parsedDate)
+                .sort((a, b) => a.parsedDate.getTime() - b.parsedDate.getTime())[0];
+              if (!firstProof) return null;
+              const hours = (firstProof.parsedDate.getTime() - entry.parsedDate.getTime()) / (1000 * 60 * 60);
+              return Number.isFinite(hours) && hours >= 0 ? hours : null;
+            })
+            .filter((value): value is number => value !== null);
+
+          if (lagHours.length === 0) {
+            setPaymentReliabilityScore(null);
+          } else {
+            const averageLagHours = lagHours.reduce((sum, value) => sum + value, 0) / lagHours.length;
+            const score = Math.max(0, Math.min(100, 100 - (Math.min(averageLagHours, 24 * 14) / (24 * 14)) * 100));
+            setPaymentReliabilityScore(score);
+          }
+        } else {
+          setPaymentReliabilityScore(null);
         }
       } catch (err) {
         console.error('Load credit request error:', err);
@@ -176,6 +216,14 @@ const CreditDetails: React.FC = () => {
 
   const isPending = request.status === 'Pending';
   const buyerName = buyer?.companyName || request.buyerId;
+  const reliabilityTone =
+    paymentReliabilityScore === null
+      ? 'bg-slate-100 text-slate-500'
+      : paymentReliabilityScore >= 80
+        ? 'bg-emerald-50 text-emerald-700'
+        : paymentReliabilityScore >= 55
+          ? 'bg-amber-50 text-amber-700'
+          : 'bg-red-50 text-red-600';
   const handleApprove = async () => {
     if (!request) return;
     if (approvedAmount <= 0) {
@@ -214,7 +262,12 @@ const CreditDetails: React.FC = () => {
             </div>
             <div>
               <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('common.buyer')}</p>
-              <p className="font-bold text-slate-800">{buyerName}</p>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <p className="font-bold text-slate-800">{buyerName}</p>
+                <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-black uppercase tracking-wider ${reliabilityTone}`}>
+                  Payment reliability {paymentReliabilityScore === null ? 'N/A' : `${paymentReliabilityScore.toFixed(0)}/100`}
+                </span>
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>

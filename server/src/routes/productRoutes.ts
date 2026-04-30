@@ -1,6 +1,16 @@
 // src/routes/productRoutes.ts
 import { Router } from 'express';
-import { getProductById,createProduct,getAllProducts,updateProduct,deleteProduct,adjustProductStock } from '../controllers/productController';
+import {
+  addProductBatch,
+  adjustProductStock,
+  createProduct,
+  deleteProduct,
+  editProductBatch,
+  getAllProducts,
+  getProductById,
+  removeProductBatch,
+  updateProduct,
+} from '../controllers/productController';
 import { authenticateToken } from '../middleware/authMiddleware';
 
 const router = Router();
@@ -13,5 +23,8 @@ router.get('/', authenticateToken, getAllProducts);
 router.delete('/:id', authenticateToken, deleteProduct);
 // In productRoutes.ts
 router.put('/:id', authenticateToken, updateProduct);
+router.post('/:id/batches', authenticateToken, addProductBatch);
+router.put('/:id/batches/:batchId', authenticateToken, editProductBatch);
+router.delete('/:id/batches/:batchId', authenticateToken, removeProductBatch);
 router.post('/:id/adjust-stock', authenticateToken, adjustProductStock);
 export default router;

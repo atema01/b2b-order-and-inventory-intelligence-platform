@@ -18,6 +18,11 @@ const RestockProduct: React.FC = () => {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [storageLocations, setStorageLocations] = useState(DEFAULT_STORAGE_LOCATIONS);
+  const [batchForm, setBatchForm] = useState({
+    batchNumber: '',
+    manufacturingDate: '',
+    expiryDate: ''
+  });
 
   // Fetch products from real API
   useEffect(() => {
@@ -57,32 +62,26 @@ const RestockProduct: React.FC = () => {
     setIsSubmitting(true);
     
     try {
-      // Calculate new stock levels
-      const updatedStock = {
-        mainWarehouse: product.stock.mainWarehouse + (quantities.mainWarehouse || 0),
-        backRoom: product.stock.backRoom + (quantities.backRoom || 0),
-        showRoom: product.stock.showRoom + (quantities.showRoom || 0)
-      };
+      const totalIncoming = Object.values(quantities).reduce((sum, value) => sum + (value || 0), 0);
+      if (totalIncoming <= 0) {
+        alert('Enter at least one quantity to restock.');
+        return;
+      }
+      if (!batchForm.batchNumber || !batchForm.manufacturingDate || !batchForm.expiryDate) {
+        alert('Batch number, manufacturing date, and expiry date are required.');
+        return;
+      }
 
-      // Determine new status based on total inventory
-      const total = updatedStock.mainWarehouse + updatedStock.backRoom + updatedStock.showRoom;
-      const newStatus = total === 0 ? 'Empty' : total < product.reorderPoint ? 'Low' : 'In Stock';
-
-      // Prepare updated product data
-      const updatedProduct = {
-        ...product,
-        stock: updatedStock,
-        status: newStatus
-      };
-
-      // Update product via real API
-      const response = await fetch(`/api/products/${selectedProductId}`, {
-        method: 'PUT',
+      const response = await fetch(`/api/products/${selectedProductId}/batches`, {
+        method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
         },
         credentials: 'include',
-        body: JSON.stringify(updatedProduct)
+        body: JSON.stringify({
+          ...batchForm,
+          quantities
+        })
       });
 
       if (response.ok) {
@@ -149,6 +148,36 @@ const RestockProduct: React.FC = () => {
         {selectedProduct && (
           <div className="space-y-8 pt-4 animate-in fade-in duration-500">
             {/* Unit/Pack Size Selection */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="space-y-3">
+                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Batch Number</label>
+                <input
+                  className="w-full bg-gray-50 border-gray-100 rounded-2xl px-5 py-4 font-black text-slate-800 focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all shadow-sm text-sm"
+                  value={batchForm.batchNumber}
+                  onChange={(e) => setBatchForm((prev) => ({ ...prev, batchNumber: e.target.value }))}
+                  placeholder="e.g. B-MAY-2026-02"
+                />
+              </div>
+              <div className="space-y-3">
+                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Manufacturing Date</label>
+                <input
+                  type="date"
+                  className="w-full bg-gray-50 border-gray-100 rounded-2xl px-5 py-4 font-black text-slate-800 focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all shadow-sm text-sm"
+                  value={batchForm.manufacturingDate}
+                  onChange={(e) => setBatchForm((prev) => ({ ...prev, manufacturingDate: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-3">
+                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Expiry Date</label>
+                <input
+                  type="date"
+                  className="w-full bg-gray-50 border-gray-100 rounded-2xl px-5 py-4 font-black text-slate-800 focus:ring-2 focus:ring-primary/20 focus:border-primary focus:bg-white transition-all shadow-sm text-sm"
+                  value={batchForm.expiryDate}
+                  onChange={(e) => setBatchForm((prev) => ({ ...prev, expiryDate: e.target.value }))}
+                />
+              </div>
+            </div>
+
             <div className="space-y-3">
               <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Increment Unit (Pack Size)</label>
               <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">

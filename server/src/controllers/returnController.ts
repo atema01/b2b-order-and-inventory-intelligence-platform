@@ -4,6 +4,11 @@ import pool from '../config/db';
 import { logActivity } from '../utils/activityLog';
 import { createNotificationRecord } from '../services/notificationService';
 import { emitInventoryChanged } from '../services/realtime';
+import {
+  addQuantityToLocation,
+  deductQuantityFromLocation,
+} from '../services/inventoryBatches';
+import { syncProductAcrossDatabases } from '../services/dbSync';
 
 const parseNumber = (value: any): number => {
   if (typeof value === 'number') return value;
@@ -48,33 +53,19 @@ const adjustProductStock = async (
   }
 
   const current = productResult.rows[0];
-  const main = parseInteger(current.stock_main_warehouse);
-  const back = parseInteger(current.stock_back_room);
-  const show = parseInteger(current.stock_show_room);
+  const updated =
+    direction === 'add'
+      ? await addQuantityToLocation(pool, productId, location, quantity, {
+          batchNumber: `RETURN-${productId}-${Date.now()}`,
+        })
+      : await deductQuantityFromLocation(pool, productId, location, quantity);
 
-  const delta = direction === 'add' ? quantity : -quantity;
-  const nextMain = location === 'mainWarehouse' ? main + delta : main;
-  const nextBack = location === 'backRoom' ? back + delta : back;
-  const nextShow = location === 'showRoom' ? show + delta : show;
-
-  if (nextMain < 0 || nextBack < 0 || nextShow < 0) {
-    throw new Error('Insufficient stock for adjustment');
-  }
-
+  const nextMain = parseInteger(updated.stock_main_warehouse);
+  const nextBack = parseInteger(updated.stock_back_room);
+  const nextShow = parseInteger(updated.stock_show_room);
   const totalStock = nextMain + nextBack + nextShow;
   const oldStatus = current.status;
-  const newStatus = computeStatus(totalStock, parseInteger(current.reorder_point));
-
-  await pool.query(
-    `UPDATE products SET
-      stock_main_warehouse = $1,
-      stock_back_room = $2,
-      stock_show_room = $3,
-      status = $4,
-      updated_at = CURRENT_TIMESTAMP
-     WHERE id = $5`,
-    [nextMain, nextBack, nextShow, newStatus, productId]
-  );
+  const newStatus = updated.status || computeStatus(totalStock, parseInteger(current.reorder_point));
 
   if (newStatus !== oldStatus && (newStatus === 'Low' || newStatus === 'Empty')) {
     await createNotificationRecord(
@@ -311,6 +302,7 @@ export const createReturnLog = async (req: Request, res: Response) => {
     }
 
     await pool.query('COMMIT');
+    await syncProductAcrossDatabases(productId);
 
     const row = insertResult.rows[0];
     res.status(201).json({
@@ -520,6 +512,10 @@ export const updateReturnLog = async (req: Request, res: Response) => {
     }
 
     await pool.query('COMMIT');
+    await syncProductAcrossDatabases(existing.product_id);
+    if (existing.product_id !== productId) {
+      await syncProductAcrossDatabases(productId);
+    }
 
     const row = updateResult.rows[0];
     res.json({
@@ -586,6 +582,7 @@ export const deleteReturnLog = async (req: Request, res: Response) => {
     await pool.query('DELETE FROM return_logs WHERE id = $1', [id]);
 
     await pool.query('COMMIT');
+    await syncProductAcrossDatabases(existing.product_id);
     res.json({ message: 'Return log deleted' });
 
     await logActivity(
