@@ -1,4 +1,5 @@
 
+//buyer dashboard that displays the recent orders, active orders, 
 import React from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Order, Product, Buyer, OrderStatus } from '../types';
@@ -9,12 +10,18 @@ import { useAuth } from '../contexts/AuthContext';
 import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
 import RefreshIndicator from '../components/RefreshIndicator';
 import { buyerQueryKeys, loadBuyerDashboardData } from '../services/buyerQueries';
-
+// this is the buyer dashboard 
 const BuyerDashboard: React.FC = () => {
+  // this is the navigation  to the different pages  for the buyer 
   const navigate = useNavigate();
+  // this is the language  translation for the buyer dashboard 
   const { t } = useLanguage();
+  // this is the user  for the buyer dashboard 
   const { user } = useAuth();
+  // this is the query client  for the buyer dashboard 
   const queryClient = useQueryClient();
+
+  // this is the function that loads the buyer dashboard data from the api 
   const {
     data,
     isLoading,
@@ -24,14 +31,15 @@ const BuyerDashboard: React.FC = () => {
     queryKey: buyerQueryKeys.dashboard(user?.id),
     queryFn: () => loadBuyerDashboardData(user?.id)
   });
-
+  // Extracting data with a fallback to an empty array to prevent mapping errors
   const orders = data?.orders ?? [];
   const products = data?.products ?? [];
   const buyer = data?.buyer ?? null;
-
+  // Listener: When ANY  changes in the system, refresh the dashboard data
   useRealtimeEvent('realtime:inventory', () => {
     queryClient.invalidateQueries({ queryKey: ['buyer-dashboard'] });
   });
+
 
   useRealtimeEvent('realtime:orders', (detail?: { buyerId?: string }) => {
     if (!user?.id || (detail?.buyerId && detail.buyerId !== user.id)) return;
@@ -47,17 +55,21 @@ const BuyerDashboard: React.FC = () => {
     if (!user?.id || (detail?.buyerId && detail.buyerId !== user.id)) return;
     queryClient.invalidateQueries({ queryKey: ['buyer-dashboard'] });
   });
-
+  // Standardizes status strings (e.g., " pending " becomes "PENDING")
   const normalizeStatus = (status: string) => status?.toString().trim().toUpperCase() || '';
+
+  // Calculates the timestamp for the 1st day of the current month (e.g., May 1st, 2026)
   const now = new Date();
   const startOfCurrentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
   const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
 
+  // Helper: Checks if a date string falls within a specific start and end range.
   const isBetween = (value: string, start: Date, end: Date) => {
     const date = new Date(value);
     return !Number.isNaN(date.getTime()) && date >= start && date < end;
   };
 
+  // Logic: Calculates the percentage increase/decrease between two periods.
   const formatTrend = (current: number, previous: number) => {
     if (previous === 0) {
       if (current === 0) return { text: '0.0%', up: true };
@@ -67,13 +79,13 @@ const BuyerDashboard: React.FC = () => {
     const sign = change > 0 ? '+' : '';
     return { text: `${sign}${change.toFixed(1)}%`, up: change >= 0 };
   };
-
+  //THIS FUNCTION IS USED TO FORMAT THE CURRENCY
   const formatCompactCurrency = (value: number) => {
     if (value >= 1000000) return `ETB ${(value / 1000000).toFixed(1)}M`;
     if (value >= 1000) return `ETB ${(value / 1000).toFixed(1)}K`;
     return `ETB ${value.toLocaleString()}`;
   };
-
+  //THIS FUNCTION IS USED TO GET THE STATUS BADGE IN THE BUYER DASHBOARD
   const getStatusBadge = (status: OrderStatus) => {
     const normalized = normalizeStatus(status);
     if (normalized === OrderStatus.SHIPPED) return 'bg-[#D1FAE5] text-[#065F46]';
@@ -82,12 +94,13 @@ const BuyerDashboard: React.FC = () => {
     if (normalized === OrderStatus.DELIVERED) return 'bg-emerald-100 text-emerald-800';
     return 'bg-gray-100 text-gray-800';
   };
-
+  // THIS FUNCTION IS USED TO NAVIGATE TO THE CATALOG PAGE
   const goToCatalog = (e: React.MouseEvent) => {
     e.stopPropagation();
     navigate('/catalog');
   };
 
+  // THIS FUNCTION IS USED TO GET THE NUMBER OF ACTIVE ORDERS FOR THE CURRENT MONTH 
   const activeOrdersCount = orders.filter((order) => {
     const status = normalizeStatus(order.status);
     return status !== OrderStatus.DELIVERED &&
@@ -95,22 +108,32 @@ const BuyerDashboard: React.FC = () => {
       status !== OrderStatus.DELETED;
   }).length;
 
+  // THIS FUNCTION IS USED TO GET THE NUMBER OF ACTIVE ORDERS FOR THE PREVIOUS MONTH
   const previousMonthOrders = orders.filter((order) =>
     isBetween(order.date, startOfLastMonth, startOfCurrentMonth)
   );
+
+  // THIS FUNCTION IS USED TO GET THE NUMBER OF ACTIVE ORDERS FOR THE PREVIOUS MONTH
   const previousActiveOrdersCount = previousMonthOrders.filter((order) => {
     const status = normalizeStatus(order.status);
     return status !== OrderStatus.DELIVERED &&
       status !== OrderStatus.CANCELLED &&
       status !== OrderStatus.DELETED;
   }).length;
+  // THIS FUNCTION IS USED TO GET THE NUMBER OF ACTIVE ORDERS FOR THE CURRENT MONTH
   const currentMonthOrdersCount = orders.filter((order) =>
     isBetween(order.date, startOfCurrentMonth, now)
   ).length;
+
   const previousMonthOrdersCount = previousMonthOrders.length;
+
+
+
+  // THIS FUNCTION IS USED TO CALCULATE THE CURRENT MONTH SPEND
   const currentMonthSpend = orders
     .filter((order) => isBetween(order.date, startOfCurrentMonth, now))
     .reduce((sum, order) => sum + (order.amountPaid || 0), 0);
+  // THIS FUNCTION IS USED TO CALCULATE THE PREVIOUS MONTH SPEND
   const previousMonthSpend = previousMonthOrders
     .reduce((sum, order) => sum + (order.amountPaid || 0), 0);
   const totalSpend = orders.reduce((sum, order) => sum + (order.amountPaid || 0), 0);
@@ -131,6 +154,7 @@ const BuyerDashboard: React.FC = () => {
   if (isLoading) return <LoadingState message="Loading dashboard..." />;
   if (error) {
     return (
+      // THIS FUNCTION IS USED TO HANDLE THE ERROR WHEN THE BUYER DASHBOARD DATA IS NOT LOADED
       <div className="p-8">
         <div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-center">
           <p className="mb-2 font-semibold text-red-700">Failed to load buyer dashboard data.</p>
@@ -148,12 +172,13 @@ const BuyerDashboard: React.FC = () => {
   if (!buyer) return <div className="p-8">No buyer profile found.</div>;
 
   return (
+    // THIS FUNCTION IS USED TO HANDLE THE BUYER DASHBOARD
     <div className="p-4 lg:p-8 max-w-7xl mx-auto space-y-8 lg:space-y-12">
       {/* Welcome */}
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div className="space-y-1">
           <h2 className="text-2xl lg:text-3xl font-black text-slate-900 tracking-tight">{t('dash.hello')}, {buyer.contactPerson.split(' ')[0]}</h2>
- <p className="text-slate-500 text-sm font-medium">
+          <p className="text-slate-500 text-sm font-medium">
             {new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
           </p>        </div>
         <RefreshIndicator visible={isFetching && !isLoading} />
@@ -180,11 +205,11 @@ const BuyerDashboard: React.FC = () => {
           <h3 className="text-lg font-bold text-slate-900">{t('buyer.recentOrders')}</h3>
           <button onClick={() => navigate('/orders')} className="text-[#00A3C4] text-xs font-black uppercase tracking-widest hover:underline hover:text-[#008CA8] transition-colors">{t('buyer.viewHistory')}</button>
         </div>
-        
+
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-6">
           {orders.slice(0, 3).map(order => (
-            <div 
-              key={order.id} 
+            <div
+              key={order.id}
               onClick={() => navigate(`/orders/${order.id}`)}
               className="bg-white p-6 rounded-[28px] border border-gray-100 shadow-sm flex flex-col justify-between group cursor-pointer hover:border-[#00A3C4]/30 hover:shadow-lg transition-all active:scale-[0.98] h-full"
             >
@@ -201,8 +226,8 @@ const BuyerDashboard: React.FC = () => {
                   {order.date}
                 </p>
                 <div className="flex justify-between items-end">
-                   <p className="text-xs text-gray-500 font-bold">{order.items.length} {t('buyer.items')}</p>
-                   <p className="font-black text-slate-800 text-xl">{order.total.toLocaleString()} <span className="text-xs font-bold text-gray-400">ETB</span></p>
+                  <p className="text-xs text-gray-500 font-bold">{order.items.length} {t('buyer.items')}</p>
+                  <p className="font-black text-slate-800 text-xl">{order.total.toLocaleString()} <span className="text-xs font-bold text-gray-400">ETB</span></p>
                 </div>
               </div>
             </div>
@@ -230,8 +255,8 @@ const BuyerDashboard: React.FC = () => {
             const isRecommended = Boolean(p.recommended);
 
             return (
-              <div 
-                key={p.id} 
+              <div
+                key={p.id}
                 onClick={() => navigate(`/catalog/${p.id}`)}
                 className="snap-center shrink-0 w-64 lg:w-auto bg-white p-4 rounded-[28px] border border-gray-100 shadow-sm space-y-3 group hover:shadow-xl hover:-translate-y-1 transition-all duration-300 flex flex-col cursor-pointer"
               >
@@ -247,7 +272,7 @@ const BuyerDashboard: React.FC = () => {
                     )}
                   </div>
                 </div>
-                
+
                 <div className="flex-1">
                   <p className="text-[10px] font-black uppercase text-[#00A3C4] tracking-widest truncate">{p.brand}</p>
                   {isRecommended && (
@@ -260,10 +285,10 @@ const BuyerDashboard: React.FC = () => {
                 </div>
 
                 <div className="flex items-center justify-between">
-                    <p className="font-black text-slate-800 text-lg">{p.price.toLocaleString()} <span className="text-[10px] text-gray-400 font-bold">ETB</span></p>
+                  <p className="font-black text-slate-800 text-lg">{p.price.toLocaleString()} <span className="text-[10px] text-gray-400 font-bold">ETB</span></p>
                 </div>
 
-                <button 
+                <button
                   onClick={goToCatalog}
                   className="w-full py-3 bg-[#00A3C4] hover:bg-[#008CA8] text-white rounded-xl font-bold text-xs uppercase tracking-widest shadow-lg shadow-[#00A3C4]/20 active:scale-95 transition-all flex items-center justify-center gap-2 group/btn"
                 >

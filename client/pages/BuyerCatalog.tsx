@@ -11,13 +11,14 @@ import { useRealtimeEvent } from '../hooks/useRealtimeEvent';
 import RefreshIndicator from '../components/RefreshIndicator';
 import { buyerQueryKeys, loadBuyerCatalogData } from '../services/buyerQueries';
 
+//this function is used to laod buuyer catalog data 
 const BuyerCatalog: React.FC = () => {
   const { t } = useLanguage();
   const { user } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('All');
-  
-  // Cart State
+
+  //
   const [cart, setCart] = useState<{ productId: string; quantity: number }[]>(() => getCart());
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [requestCredit, setRequestCredit] = useState(false);
@@ -36,7 +37,8 @@ const BuyerCatalog: React.FC = () => {
   const cartInitRef = useRef(false);
   const draftHydratedRef = useRef<string | null>(null);
   const creditPaymentFileRef = useRef<HTMLInputElement>(null);
-  
+
+  // THESE FUNCTION IS USED TO HANDLE THE SEARCH AND FILTERING OF PRODUCTS
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -44,6 +46,8 @@ const BuyerCatalog: React.FC = () => {
   const query = new URLSearchParams(location.search).get('q')?.trim().toLowerCase() || '';
   const draftParam = searchParams.get('draftId');
   const openCartParam = searchParams.get('openCart');
+
+  // THIS FUNCTION IS USED TO LOAD BUYER CATALOG DATA
   const {
     data: catalogData,
     isLoading,
@@ -54,9 +58,12 @@ const BuyerCatalog: React.FC = () => {
     queryFn: () => loadBuyerCatalogData(user?.id, draftParam)
   });
 
+
   const products = catalogData?.products ?? [];
   const categories = catalogData?.categories ?? [];
   const taxRate = catalogData?.taxRate ?? 0.15;
+
+
 
   useEffect(() => {
     if (!catalogData) return;
@@ -155,13 +162,13 @@ const BuyerCatalog: React.FC = () => {
 
   const setQuantity = (productId: string, qty: number) => {
     setCart(prev => {
-        const validQty = Math.max(0, qty);
-        const existing = prev.find(i => i.productId === productId);
-        if (existing) {
-            return prev.map(i => i.productId === productId ? { ...i, quantity: validQty } : i);
-        }
-        if (validQty > 0) return [...prev, { productId, quantity: validQty }];
-        return prev;
+      const validQty = Math.max(0, qty);
+      const existing = prev.find(i => i.productId === productId);
+      if (existing) {
+        return prev.map(i => i.productId === productId ? { ...i, quantity: validQty } : i);
+      }
+      if (validQty > 0) return [...prev, { productId, quantity: validQty }];
+      return prev;
     });
   };
 
@@ -261,7 +268,7 @@ const BuyerCatalog: React.FC = () => {
       total: orderTotal,
       amountPaid: 0,
       paymentStatus: 'Unpaid',
-      history: [{ 
+      history: [{
         status: status === OrderStatus.DRAFT ? 'Draft Saved' : 'Order Placed',
         date: now.toLocaleString(),
         note: status === OrderStatus.DRAFT ? 'Order saved as draft' : 'Order submitted via online catalog'
@@ -271,20 +278,20 @@ const BuyerCatalog: React.FC = () => {
     try {
       const response = isDraftSubmission
         ? await fetch('/api/orders/draft', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ items: validItems })
-          })
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ items: validItems })
+        })
         : await fetch('/api/orders', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              ...newOrder,
-              status: statusValue
-            })
-          });
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            ...newOrder,
+            status: statusValue
+          })
+        });
 
       if (!response.ok) {
         const errorData = await response.json();
@@ -411,12 +418,12 @@ const BuyerCatalog: React.FC = () => {
           },
           payment: requiresUpfrontPayment
             ? {
-                amount: requiredUpfrontAmount,
-                method: creditPaymentMethod,
-                referenceId: trimmedPaymentReference || null,
-                proofImage: creditPaymentProof || null,
-                notes: trimmedPaymentNotes || null
-              }
+              amount: requiredUpfrontAmount,
+              method: creditPaymentMethod,
+              referenceId: trimmedPaymentReference || null,
+              proofImage: creditPaymentProof || null,
+              notes: trimmedPaymentNotes || null
+            }
             : null
         })
       });
@@ -480,74 +487,74 @@ const BuyerCatalog: React.FC = () => {
     const isRecommended = Boolean(p.recommended);
 
     return (
-        <div 
-          key={p.id} 
-          onClick={() => navigate(`/catalog/${p.id}`)}
-          className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex flex-row gap-3 group hover:shadow-xl hover:border-[#00A3C4]/20 transition-all duration-300 cursor-pointer h-full"
-        >
-          <div className="relative w-20 h-20 lg:w-14 lg:h-14 rounded-xl overflow-hidden bg-gray-50 border border-gray-50 shrink-0">
-            <img src={p.image} alt={p.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
-            <div className="absolute top-1 right-1 flex flex-col items-end gap-1">
-              {isOutOfStock ? (
-                <span className="px-1.5 py-0.5 bg-red-500 text-white text-[8px] font-black uppercase rounded-lg shadow-md block">{t('buyer.soldOut')}</span>
-              ) : isLowStock ? (
-                <span className="px-1.5 py-0.5 bg-amber-500 text-white text-[8px] font-black uppercase rounded-lg shadow-md block animate-pulse">{t('buyer.lowStock')}</span>
-              ) : (
-                <span className="px-1.5 py-0.5 bg-emerald-500 text-white text-[8px] font-black uppercase rounded-lg shadow-md block">{t('buyer.inStock')}</span>
-              )}
-            </div>
+      <div
+        key={p.id}
+        onClick={() => navigate(`/catalog/${p.id}`)}
+        className="bg-white p-3 rounded-2xl border border-gray-100 shadow-sm flex flex-row gap-3 group hover:shadow-xl hover:border-[#00A3C4]/20 transition-all duration-300 cursor-pointer h-full"
+      >
+        <div className="relative w-20 h-20 lg:w-14 lg:h-14 rounded-xl overflow-hidden bg-gray-50 border border-gray-50 shrink-0">
+          <img src={p.image} alt={p.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
+          <div className="absolute top-1 right-1 flex flex-col items-end gap-1">
+            {isOutOfStock ? (
+              <span className="px-1.5 py-0.5 bg-red-500 text-white text-[8px] font-black uppercase rounded-lg shadow-md block">{t('buyer.soldOut')}</span>
+            ) : isLowStock ? (
+              <span className="px-1.5 py-0.5 bg-amber-500 text-white text-[8px] font-black uppercase rounded-lg shadow-md block animate-pulse">{t('buyer.lowStock')}</span>
+            ) : (
+              <span className="px-1.5 py-0.5 bg-emerald-500 text-white text-[8px] font-black uppercase rounded-lg shadow-md block">{t('buyer.inStock')}</span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex-1 flex flex-col justify-between min-w-0">
+          <div className="space-y-0.5">
+            <p className="text-[9px] font-black uppercase text-[#00A3C4] tracking-widest truncate">{p.brand}</p>
+            {isRecommended && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-[#E0F7FA] px-2 py-1 text-[9px] font-black uppercase tracking-[0.2em] text-[#008CA8] w-fit">
+                <span className="material-symbols-outlined text-[11px]">stars</span>
+                {t('buyer.recommended')}
+              </span>
+            )}
+            <h3 className="font-bold text-slate-900 text-xs leading-tight line-clamp-2">{p.name}</h3>
+            <p className="text-[10px] text-gray-400 font-medium">SKU: {p.sku}</p>
           </div>
 
-          <div className="flex-1 flex flex-col justify-between min-w-0">
-            <div className="space-y-0.5">
-              <p className="text-[9px] font-black uppercase text-[#00A3C4] tracking-widest truncate">{p.brand}</p>
-              {isRecommended && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-[#E0F7FA] px-2 py-1 text-[9px] font-black uppercase tracking-[0.2em] text-[#008CA8] w-fit">
-                  <span className="material-symbols-outlined text-[11px]">stars</span>
-                  {t('buyer.recommended')}
-                </span>
-              )}
-              <h3 className="font-bold text-slate-900 text-xs leading-tight line-clamp-2">{p.name}</h3>
-              <p className="text-[10px] text-gray-400 font-medium">SKU: {p.sku}</p>
+          <div className="flex items-end justify-between mt-1">
+            <div>
+              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-0.5">Wholesale</p>
+              <p className="text-sm font-black text-slate-800">{p.price.toLocaleString()} <span className="text-[10px]">ETB</span></p>
             </div>
 
-            <div className="flex items-end justify-between mt-1">
-              <div>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-0.5">Wholesale</p>
-                <p className="text-sm font-black text-slate-800">{p.price.toLocaleString()} <span className="text-[10px]">ETB</span></p>
-              </div>
-
-              <div onClick={(e) => e.stopPropagation()}>
-                 {!isInCart ? (
-                    <button 
-                      onClick={() => updateCart(p.id, 1)}
-                      disabled={isOutOfStock}
-                      className="size-8 bg-[#00A3C4] text-white rounded-lg flex items-center justify-center shadow-md active:scale-90 transition-all disabled:bg-gray-200"
-                    >
-                      <span className="material-symbols-outlined text-lg">add</span>
-                    </button>
-                 ) : (
-                    <div className="flex items-center gap-1 bg-gray-50 rounded-lg p-1 border border-gray-100 shadow-inner">
-                       <button onClick={() => updateCart(p.id, -1)} className="size-6 bg-white rounded shadow-sm flex items-center justify-center text-slate-600 active:scale-90"><span className="material-symbols-outlined text-xs">remove</span></button>
-                       <input 
-                          type="number"
-                          className="w-8 text-center bg-transparent border-none p-0 text-xs font-black focus:ring-0 appearance-none"
-                          value={qty === 0 ? '' : qty}
-                          onClick={(e) => e.stopPropagation()}
-                          onBlur={() => handleInputBlur(p.id)}
-                          onChange={(e) => {
-                              const val = e.target.value;
-                              const intVal = parseInt(val);
-                              setQuantity(p.id, isNaN(intVal) ? 0 : intVal);
-                          }}
-                       />
-                       <button onClick={() => updateCart(p.id, 1)} disabled={isOutOfStock} className="size-6 bg-white rounded shadow-sm flex items-center justify-center text-[#00A3C4] active:scale-90 disabled:opacity-50"><span className="material-symbols-outlined text-xs">add</span></button>
-                    </div>
-                 )}
-              </div>
+            <div onClick={(e) => e.stopPropagation()}>
+              {!isInCart ? (
+                <button
+                  onClick={() => updateCart(p.id, 1)}
+                  disabled={isOutOfStock}
+                  className="size-8 bg-[#00A3C4] text-white rounded-lg flex items-center justify-center shadow-md active:scale-90 transition-all disabled:bg-gray-200"
+                >
+                  <span className="material-symbols-outlined text-lg">add</span>
+                </button>
+              ) : (
+                <div className="flex items-center gap-1 bg-gray-50 rounded-lg p-1 border border-gray-100 shadow-inner">
+                  <button onClick={() => updateCart(p.id, -1)} className="size-6 bg-white rounded shadow-sm flex items-center justify-center text-slate-600 active:scale-90"><span className="material-symbols-outlined text-xs">remove</span></button>
+                  <input
+                    type="number"
+                    className="w-8 text-center bg-transparent border-none p-0 text-xs font-black focus:ring-0 appearance-none"
+                    value={qty === 0 ? '' : qty}
+                    onClick={(e) => e.stopPropagation()}
+                    onBlur={() => handleInputBlur(p.id)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      const intVal = parseInt(val);
+                      setQuantity(p.id, isNaN(intVal) ? 0 : intVal);
+                    }}
+                  />
+                  <button onClick={() => updateCart(p.id, 1)} disabled={isOutOfStock} className="size-6 bg-white rounded shadow-sm flex items-center justify-center text-[#00A3C4] active:scale-90 disabled:opacity-50"><span className="material-symbols-outlined text-xs">add</span></button>
+                </div>
+              )}
             </div>
           </div>
         </div>
+      </div>
     );
   };
 
@@ -647,7 +654,7 @@ const BuyerCatalog: React.FC = () => {
             <h2 className="text-base font-black text-slate-800 leading-none">
               {draftId ? t('buyer.editDraft') : t('buyer.cart')}
             </h2>
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mt-1">{cart.reduce((a,b)=>a+b.quantity,0)} {t('buyer.items')}</p>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mt-1">{cart.reduce((a, b) => a + b.quantity, 0)} {t('buyer.items')}</p>
           </div>
         </div>
         {isMobile && (
@@ -688,17 +695,17 @@ const BuyerCatalog: React.FC = () => {
                     <p className="font-black text-slate-800 text-sm">{p.price.toLocaleString()} <span className="text-[9px] text-gray-400 font-bold">ETB</span></p>
                     <div className="flex items-center gap-1 bg-gray-50 rounded-lg p-1 border border-gray-100 shadow-inner">
                       <button onClick={() => updateCart(item.productId, -1)} className="size-5 flex items-center justify-center bg-white rounded shadow-sm text-xs hover:text-red-500 transition-colors"><span className="material-symbols-outlined text-[10px]">remove</span></button>
-                      <input 
-                          type="number"
-                          className="w-6 text-center bg-transparent border-none p-0 text-xs font-black focus:ring-0 appearance-none"
-                          value={item.quantity === 0 ? '' : item.quantity}
-                          onBlur={() => handleInputBlur(item.productId)}
-                          onChange={(e) => {
-                              const val = e.target.value;
-                              const intVal = parseInt(val);
-                              setQuantity(item.productId, isNaN(intVal) ? 0 : intVal);
-                          }}
-                       />
+                      <input
+                        type="number"
+                        className="w-6 text-center bg-transparent border-none p-0 text-xs font-black focus:ring-0 appearance-none"
+                        value={item.quantity === 0 ? '' : item.quantity}
+                        onBlur={() => handleInputBlur(item.productId)}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          const intVal = parseInt(val);
+                          setQuantity(item.productId, isNaN(intVal) ? 0 : intVal);
+                        }}
+                      />
                       <button onClick={() => updateCart(item.productId, 1)} className="size-5 flex items-center justify-center bg-white rounded shadow-sm text-xs hover:text-[#00A3C4] transition-colors"><span className="material-symbols-outlined text-[10px]">add</span></button>
                     </div>
                   </div>
@@ -727,18 +734,18 @@ const BuyerCatalog: React.FC = () => {
           </div>
 
           <div className="bg-white border border-gray-200 rounded-xl p-3 flex items-center gap-3">
-             <input 
-               type="checkbox" 
-               id="creditCheck" 
-               checked={requestCredit} 
-               onChange={(e) => setRequestCredit(e.target.checked)}
-               className="rounded text-[#00A3C4] focus:ring-[#00A3C4]"
-             />
-             <label htmlFor="creditCheck" className="text-xs font-bold text-slate-700 flex-1">Request Credit for this Order</label>
+            <input
+              type="checkbox"
+              id="creditCheck"
+              checked={requestCredit}
+              onChange={(e) => setRequestCredit(e.target.checked)}
+              className="rounded text-[#00A3C4] focus:ring-[#00A3C4]"
+            />
+            <label htmlFor="creditCheck" className="text-xs font-bold text-slate-700 flex-1">Request Credit for this Order</label>
           </div>
 
           <div className="flex flex-col gap-2">
-            <button 
+            <button
               onClick={() => {
                 if (requestCredit) {
                   openCreditRequestModal();
@@ -751,8 +758,8 @@ const BuyerCatalog: React.FC = () => {
               {requestCredit ? 'Submit & Request Credit' : 'Proceed to Payment'}
               <span className="material-symbols-outlined text-base">arrow_forward</span>
             </button>
-            
-            <button 
+
+            <button
               onClick={() => handleOrderAction(OrderStatus.DRAFT)}
               className="w-full py-3.5 bg-white border border-gray-200 text-slate-500 rounded-xl font-black text-xs uppercase tracking-widest hover:bg-gray-50 active:scale-95 transition-all flex items-center justify-center gap-2"
             >
@@ -773,15 +780,15 @@ const BuyerCatalog: React.FC = () => {
             <div className="flex items-center gap-4">
               <div className="relative flex-1">
                 <span className="absolute left-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-gray-400">search</span>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   placeholder={t('buyer.search')}
                   className="w-full pl-12 pr-4 py-3.5 rounded-2xl border border-gray-200 bg-white text-sm font-medium shadow-sm focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
               </div>
-              <button 
+              <button
                 onClick={() => setIsListView((current) => !current)}
                 className="flex h-12 items-center gap-2 rounded-2xl border border-gray-200 bg-white px-4 text-slate-600 shadow-sm transition-all hover:border-[#00A3C4]/30 hover:text-[#008CA8]"
               >
@@ -795,15 +802,15 @@ const BuyerCatalog: React.FC = () => {
 
             <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
               <button
-                  onClick={() => setActiveCategory('All')}
-                  className={`
+                onClick={() => setActiveCategory('All')}
+                className={`
                     px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest whitespace-nowrap border transition-all
                     ${activeCategory === 'All'
-                      ? 'bg-[#00A3C4] border-[#00A3C4] text-white shadow-lg shadow-[#00A3C4]/20' 
-                      : 'bg-white border-gray-200 text-slate-500 hover:bg-gray-50'}
+                    ? 'bg-[#00A3C4] border-[#00A3C4] text-white shadow-lg shadow-[#00A3C4]/20'
+                    : 'bg-white border-gray-200 text-slate-500 hover:bg-gray-50'}
                   `}
-                >
-                  {t('cat.all')}
+              >
+                {t('cat.all')}
               </button>
               {categories.map(cat => (
                 <button
@@ -811,8 +818,8 @@ const BuyerCatalog: React.FC = () => {
                   onClick={() => setActiveCategory(cat.name)}
                   className={`
                     px-5 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest whitespace-nowrap border transition-all
-                    ${activeCategory === cat.name 
-                      ? 'bg-[#00A3C4] border-[#00A3C4] text-white shadow-lg shadow-[#00A3C4]/20' 
+                    ${activeCategory === cat.name
+                      ? 'bg-[#00A3C4] border-[#00A3C4] text-white shadow-lg shadow-[#00A3C4]/20'
                       : 'bg-white border-gray-200 text-slate-500 hover:bg-gray-50'}
                   `}
                 >
@@ -837,43 +844,43 @@ const BuyerCatalog: React.FC = () => {
             </div>
           )}
           <section>
-             <div className="flex items-center gap-2 mb-4">
-               <span className="material-symbols-outlined text-slate-400">{isListView ? 'table_rows' : 'grid_view'}</span>
-               <h3 className="text-lg font-black text-slate-900 uppercase tracking-tight">Catalog</h3>
-             </div>
-             {isLoading ? (
-               <LoadingState message="Loading catalog..." />
-             ) : (
-               isListView ? (
-                 <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                   <div className="grid grid-cols-[minmax(0,1.8fr)_auto_auto] gap-3 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">
-                     <span>Product</span>
-                     <span>Price</span>
-                     <span>Qty</span>
-                   </div>
-                   <div>
-                     {filteredProducts.map(p => renderProductListRow(p))}
-                   </div>
-                 </div>
-               ) : (
-                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-6">
-                    {filteredProducts.map(p => renderProductCard(p))}
-                 </div>
-               )
-             )}
-             
-             {!isLoading && filteredProducts.length === 0 && (
-                <div className="py-20 text-center">
-                  <span className="material-symbols-outlined text-6xl text-gray-200 mb-4">search_off</span>
-                  <p className="text-gray-400 font-bold uppercase tracking-widest text-xs">No products match your search</p>
+            <div className="flex items-center gap-2 mb-4">
+              <span className="material-symbols-outlined text-slate-400">{isListView ? 'table_rows' : 'grid_view'}</span>
+              <h3 className="text-lg font-black text-slate-900 uppercase tracking-tight">Catalog</h3>
+            </div>
+            {isLoading ? (
+              <LoadingState message="Loading catalog..." />
+            ) : (
+              isListView ? (
+                <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <div className="grid grid-cols-[minmax(0,1.8fr)_auto_auto] gap-3 border-b border-slate-200 bg-slate-50 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">
+                    <span>Product</span>
+                    <span>Price</span>
+                    <span>Qty</span>
+                  </div>
+                  <div>
+                    {filteredProducts.map(p => renderProductListRow(p))}
+                  </div>
                 </div>
-             )}
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-6">
+                  {filteredProducts.map(p => renderProductCard(p))}
+                </div>
+              )
+            )}
+
+            {!isLoading && filteredProducts.length === 0 && (
+              <div className="py-20 text-center">
+                <span className="material-symbols-outlined text-6xl text-gray-200 mb-4">search_off</span>
+                <p className="text-gray-400 font-bold uppercase tracking-widest text-xs">No products match your search</p>
+              </div>
+            )}
           </section>
         </div>
       </div>
 
       <div className={`fixed inset-0 z-50 transition-all duration-300 ${isCartOpen ? 'visible' : 'invisible'}`}>
-        <div 
+        <div
           className={`absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity duration-300 ${isCartOpen ? 'opacity-100' : 'opacity-0'}`}
           onClick={() => setIsCartOpen(false)}
         ></div>
@@ -883,7 +890,7 @@ const BuyerCatalog: React.FC = () => {
       </div>
 
       <div className={`fixed bottom-6 left-4 right-4 z-30 transition-all duration-300 transform ${cart.length > 0 && !isCartOpen ? 'translate-y-0 opacity-100' : 'translate-y-24 opacity-0 pointer-events-none'}`}>
-        <button 
+        <button
           onClick={() => setIsCartOpen(true)}
           className="w-full lg:w-[420px] lg:mx-auto bg-[#00A3C4] hover:bg-[#008CA8] text-white p-4 lg:p-3.5 rounded-2xl shadow-xl shadow-[#00A3C4]/30 flex items-center justify-between transition-all active:scale-95"
         >
@@ -895,12 +902,12 @@ const BuyerCatalog: React.FC = () => {
               <p className="text-[10px] font-bold opacity-80 uppercase tracking-wider">
                 {draftId ? t('buyer.editDraft') : t('buyer.cart')}
               </p>
-              <p className="text-sm font-black">{cart.reduce((a,b)=>a+b.quantity,0)} {t('buyer.items')}</p>
+              <p className="text-sm font-black">{cart.reduce((a, b) => a + b.quantity, 0)} {t('buyer.items')}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-             <span className="font-black text-lg">{calculateTotal().toLocaleString()} ETB</span>
-             <span className="material-symbols-outlined">arrow_forward</span>
+            <span className="font-black text-lg">{calculateTotal().toLocaleString()} ETB</span>
+            <span className="material-symbols-outlined">arrow_forward</span>
           </div>
         </button>
       </div>
@@ -909,223 +916,222 @@ const BuyerCatalog: React.FC = () => {
         <div className="fixed inset-0 z-[60] bg-slate-900/50 backdrop-blur-sm overflow-y-auto px-4 py-8 sm:py-10">
           <div className="min-h-full flex items-start justify-center">
             <div className="w-full max-w-lg rounded-[32px] bg-white shadow-2xl border border-white/60 overflow-hidden my-auto max-h-[calc(100vh-4rem)] flex flex-col">
-            <div className="p-8 pb-6 border-b border-slate-100">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex items-center gap-4">
-                  <div className="size-14 rounded-2xl bg-[#E0F7FA] text-[#00A3C4] flex items-center justify-center shrink-0">
-                    <span className="material-symbols-outlined text-2xl">credit_score</span>
-                  </div>
-                  <div>
-                    <h3 className="text-xl font-black text-slate-900">Credit Request</h3>
-                    <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mt-1">Choose how much of this order should go on credit</p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsCreditModalOpen(false)}
-                  className="size-10 rounded-xl bg-slate-100 text-slate-500 hover:bg-slate-200 transition-all flex items-center justify-center"
-                >
-                  <span className="material-symbols-outlined">close</span>
-                </button>
-              </div>
-            </div>
-
-            <form onSubmit={handleSubmitAndRequestCredit} className="p-8 space-y-6 overflow-y-auto">
-              <div className="rounded-3xl bg-slate-50 border border-slate-200 p-5">
-                <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-slate-400">
-                  <span>Order Total</span>
-                  <span>Requested Credit</span>
-                </div>
-                <div className="mt-3 flex items-end justify-between gap-4">
-                  <div>
-                    <p className="text-2xl font-black text-slate-900">ETB {orderTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
-                    <p className="text-xs text-slate-500 font-medium mt-1">Tax included</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-2xl font-black text-[#00A3C4]">ETB {safeCreditAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
-                    <p className="text-xs text-slate-500 font-medium mt-1">{creditPercentage.toFixed(1)}% of order total</p>
-                  </div>
-                </div>
-                <div className="mt-4 border-t border-slate-200 pt-4 flex items-center justify-between text-xs font-bold uppercase tracking-wider text-slate-500">
-                  <span>Upfront Payment</span>
-                  <span>ETB {requiredUpfrontAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Credit Percentage</label>
-                <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  {[25, 50, 75, 100].map((percentage) => (
-                    <button
-                      key={percentage}
-                      type="button"
-                      onClick={() => applyCreditPercentage(percentage)}
-                      className={`rounded-2xl border px-4 py-3 text-sm font-black transition-all ${
-                        selectedCreditPercentage === percentage
-                          ? 'border-[#00A3C4] bg-[#E0F7FA] text-[#008CA8] shadow-sm'
-                          : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
-                      }`}
-                    >
-                      {percentage}%
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Custom Credit Amount (ETB)</label>
-                <input
-                  type="number"
-                  min="0"
-                  max={orderTotal}
-                  step="0.01"
-                  value={creditAmount}
-                  onChange={(e) => {
-                    setSelectedCreditPercentage(0);
-                    setCreditAmount(e.target.value);
-                  }}
-                  className="mt-2 w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm font-bold text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
-                  placeholder="Enter custom amount"
-                />
-                <p className="mt-2 text-xs text-slate-500 font-medium">
-                  The percentage updates automatically from the amount you enter.
-                </p>
-              </div>
-
-              <div>
-                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Repayment Terms</label>
-                <div className="relative mt-2">
-                  <select
-                    className="w-full appearance-none bg-slate-50 border border-slate-200 rounded-2xl p-4 pr-12 text-sm font-bold text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
-                    value={creditPaymentTerms}
-                    onChange={(e) => setCreditPaymentTerms(e.target.value as 'Net 15' | 'Net 30')}
-                  >
-                    <option value="Net 15">15 Days</option>
-                    <option value="Net 30">30 Days</option>
-                  </select>
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 pointer-events-none">expand_more</span>
-                </div>
-              </div>
-
-              {requiresUpfrontPayment && (
-                <div className="rounded-3xl border border-amber-100 bg-amber-50/60 p-5 space-y-4">
-                  <div>
-                    <p className="text-[10px] font-black uppercase tracking-widest text-amber-600">Upfront Payment Required</p>
-                    <p className="mt-1 text-xs font-medium text-amber-700">
-                      Since this is a partial credit request, submit proof for the remaining ETB {requiredUpfrontAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}.
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Payment Method</label>
-                    <div className="relative mt-2">
-                      <select
-                        className="w-full appearance-none bg-white border border-slate-200 rounded-2xl p-4 pr-12 text-sm font-bold text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
-                        value={creditPaymentMethod}
-                        onChange={(e) => setCreditPaymentMethod(e.target.value)}
-                      >
-                        <option>Bank Transfer</option>
-                        <option>Mobile Money (CBE Birr/Telebirr)</option>
-                        <option>Check Deposit</option>
-                        <option>Cash Deposit</option>
-                      </select>
-                      <span className="absolute right-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 pointer-events-none">expand_more</span>
+              <div className="p-8 pb-6 border-b border-slate-100">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex items-center gap-4">
+                    <div className="size-14 rounded-2xl bg-[#E0F7FA] text-[#00A3C4] flex items-center justify-center shrink-0">
+                      <span className="material-symbols-outlined text-2xl">credit_score</span>
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-black text-slate-900">Credit Request</h3>
+                      <p className="text-xs font-bold uppercase tracking-wider text-slate-400 mt-1">Choose how much of this order should go on credit</p>
                     </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsCreditModalOpen(false)}
+                    className="size-10 rounded-xl bg-slate-100 text-slate-500 hover:bg-slate-200 transition-all flex items-center justify-center"
+                  >
+                    <span className="material-symbols-outlined">close</span>
+                  </button>
+                </div>
+              </div>
 
-                  <div>
-                    <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Payment Reference</label>
-                    <input
-                      value={creditPaymentReference}
-                      onChange={(e) => setCreditPaymentReference(e.target.value)}
-                      className="mt-2 w-full bg-white border border-slate-200 rounded-2xl p-4 text-sm font-medium text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
-                      placeholder="e.g. FT23098123"
-                    />
+              <form onSubmit={handleSubmitAndRequestCredit} className="p-8 space-y-6 overflow-y-auto">
+                <div className="rounded-3xl bg-slate-50 border border-slate-200 p-5">
+                  <div className="flex items-center justify-between text-xs font-bold uppercase tracking-wider text-slate-400">
+                    <span>Order Total</span>
+                    <span>Requested Credit</span>
                   </div>
+                  <div className="mt-3 flex items-end justify-between gap-4">
+                    <div>
+                      <p className="text-2xl font-black text-slate-900">ETB {orderTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+                      <p className="text-xs text-slate-500 font-medium mt-1">Tax included</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-2xl font-black text-[#00A3C4]">ETB {safeCreditAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+                      <p className="text-xs text-slate-500 font-medium mt-1">{creditPercentage.toFixed(1)}% of order total</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 border-t border-slate-200 pt-4 flex items-center justify-between text-xs font-bold uppercase tracking-wider text-slate-500">
+                    <span>Upfront Payment</span>
+                    <span>ETB {requiredUpfrontAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                  </div>
+                </div>
 
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-2">
-                      <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Payment Proof</label>
-                      {creditPaymentProof && (
+                <div>
+                  <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Credit Percentage</label>
+                  <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {[25, 50, 75, 100].map((percentage) => (
+                      <button
+                        key={percentage}
+                        type="button"
+                        onClick={() => applyCreditPercentage(percentage)}
+                        className={`rounded-2xl border px-4 py-3 text-sm font-black transition-all ${selectedCreditPercentage === percentage
+                            ? 'border-[#00A3C4] bg-[#E0F7FA] text-[#008CA8] shadow-sm'
+                            : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                          }`}
+                      >
+                        {percentage}%
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Custom Credit Amount (ETB)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max={orderTotal}
+                    step="0.01"
+                    value={creditAmount}
+                    onChange={(e) => {
+                      setSelectedCreditPercentage(0);
+                      setCreditAmount(e.target.value);
+                    }}
+                    className="mt-2 w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm font-bold text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
+                    placeholder="Enter custom amount"
+                  />
+                  <p className="mt-2 text-xs text-slate-500 font-medium">
+                    The percentage updates automatically from the amount you enter.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Repayment Terms</label>
+                  <div className="relative mt-2">
+                    <select
+                      className="w-full appearance-none bg-slate-50 border border-slate-200 rounded-2xl p-4 pr-12 text-sm font-bold text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
+                      value={creditPaymentTerms}
+                      onChange={(e) => setCreditPaymentTerms(e.target.value as 'Net 15' | 'Net 30')}
+                    >
+                      <option value="Net 15">15 Days</option>
+                      <option value="Net 30">30 Days</option>
+                    </select>
+                    <span className="absolute right-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 pointer-events-none">expand_more</span>
+                  </div>
+                </div>
+
+                {requiresUpfrontPayment && (
+                  <div className="rounded-3xl border border-amber-100 bg-amber-50/60 p-5 space-y-4">
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-widest text-amber-600">Upfront Payment Required</p>
+                      <p className="mt-1 text-xs font-medium text-amber-700">
+                        Since this is a partial credit request, submit proof for the remaining ETB {requiredUpfrontAmount.toLocaleString(undefined, { maximumFractionDigits: 2 })}.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Payment Method</label>
+                      <div className="relative mt-2">
+                        <select
+                          className="w-full appearance-none bg-white border border-slate-200 rounded-2xl p-4 pr-12 text-sm font-bold text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
+                          value={creditPaymentMethod}
+                          onChange={(e) => setCreditPaymentMethod(e.target.value)}
+                        >
+                          <option>Bank Transfer</option>
+                          <option>Mobile Money (CBE Birr/Telebirr)</option>
+                          <option>Check Deposit</option>
+                          <option>Cash Deposit</option>
+                        </select>
+                        <span className="absolute right-4 top-1/2 -translate-y-1/2 material-symbols-outlined text-slate-400 pointer-events-none">expand_more</span>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Payment Reference</label>
+                      <input
+                        value={creditPaymentReference}
+                        onChange={(e) => setCreditPaymentReference(e.target.value)}
+                        className="mt-2 w-full bg-white border border-slate-200 rounded-2xl p-4 text-sm font-medium text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
+                        placeholder="e.g. FT23098123"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Payment Proof</label>
+                        {creditPaymentProof && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCreditPaymentProof('');
+                              if (creditPaymentFileRef.current) {
+                                creditPaymentFileRef.current.value = '';
+                              }
+                            }}
+                            className="text-[10px] font-black uppercase tracking-widest text-red-500"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
+
+                      <input
+                        ref={creditPaymentFileRef}
+                        type="file"
+                        accept="image/*"
+                        onChange={handleCreditPaymentProofChange}
+                        className="hidden"
+                      />
+
+                      {creditPaymentProof ? (
+                        <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white">
+                          <img src={creditPaymentProof} alt="Payment proof" className="h-48 w-full object-cover" />
+                        </div>
+                      ) : (
                         <button
                           type="button"
-                          onClick={() => {
-                            setCreditPaymentProof('');
-                            if (creditPaymentFileRef.current) {
-                              creditPaymentFileRef.current.value = '';
-                            }
-                          }}
-                          className="text-[10px] font-black uppercase tracking-widest text-red-500"
+                          onClick={() => creditPaymentFileRef.current?.click()}
+                          className="w-full rounded-2xl border-2 border-dashed border-slate-300 bg-white px-4 py-6 text-center text-xs font-bold text-slate-500 hover:border-[#00A3C4] hover:text-[#00A3C4] transition-all"
                         >
-                          Remove
+                          Upload payment proof (if no reference)
                         </button>
                       )}
                     </div>
 
-                    <input
-                      ref={creditPaymentFileRef}
-                      type="file"
-                      accept="image/*"
-                      onChange={handleCreditPaymentProofChange}
-                      className="hidden"
-                    />
-
-                    {creditPaymentProof ? (
-                      <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white">
-                        <img src={creditPaymentProof} alt="Payment proof" className="h-48 w-full object-cover" />
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => creditPaymentFileRef.current?.click()}
-                        className="w-full rounded-2xl border-2 border-dashed border-slate-300 bg-white px-4 py-6 text-center text-xs font-bold text-slate-500 hover:border-[#00A3C4] hover:text-[#00A3C4] transition-all"
-                      >
-                        Upload payment proof (if no reference)
-                      </button>
-                    )}
+                    <div>
+                      <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Payment Note (Optional)</label>
+                      <textarea
+                        rows={2}
+                        value={creditPaymentNotes}
+                        onChange={(e) => setCreditPaymentNotes(e.target.value)}
+                        className="mt-2 w-full bg-white border border-slate-200 rounded-2xl p-4 text-sm font-medium text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
+                        placeholder="Add note for the upfront payment"
+                      />
+                    </div>
                   </div>
+                )}
 
-                  <div>
-                    <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Payment Note (Optional)</label>
-                    <textarea
-                      rows={2}
-                      value={creditPaymentNotes}
-                      onChange={(e) => setCreditPaymentNotes(e.target.value)}
-                      className="mt-2 w-full bg-white border border-slate-200 rounded-2xl p-4 text-sm font-medium text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
-                      placeholder="Add note for the upfront payment"
-                    />
-                  </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Notes (Optional)</label>
+                  <textarea
+                    rows={3}
+                    value={creditReason}
+                    onChange={(e) => setCreditReason(e.target.value)}
+                    className="mt-2 w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm font-medium text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
+                    placeholder="Add any note for this credit request"
+                  />
                 </div>
-              )}
 
-              <div>
-                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest ml-1">Notes (Optional)</label>
-                <textarea
-                  rows={3}
-                  value={creditReason}
-                  onChange={(e) => setCreditReason(e.target.value)}
-                  className="mt-2 w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm font-medium text-slate-800 focus:ring-2 focus:ring-[#00A3C4]/20 focus:border-[#00A3C4] outline-none transition-all"
-                  placeholder="Add any note for this credit request"
-                />
-              </div>
-
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsCreditModalOpen(false)}
-                  className="flex-1 py-3.5 bg-slate-100 text-slate-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-200 transition-all"
-                >
-                  {t('common.cancel')}
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmittingOrder}
-                  className="flex-[1.4] py-3.5 bg-[#00A3C4] text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-[#00A3C4]/20 hover:bg-[#008CA8] disabled:opacity-60 disabled:cursor-not-allowed transition-all"
-                >
-                  {isSubmittingOrder ? 'Submitting...' : 'Submit and Request'}
-                </button>
-              </div>
-            </form>
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsCreditModalOpen(false)}
+                    className="flex-1 py-3.5 bg-slate-100 text-slate-600 rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-slate-200 transition-all"
+                  >
+                    {t('common.cancel')}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmittingOrder}
+                    className="flex-[1.4] py-3.5 bg-[#00A3C4] text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-[#00A3C4]/20 hover:bg-[#008CA8] disabled:opacity-60 disabled:cursor-not-allowed transition-all"
+                  >
+                    {isSubmittingOrder ? 'Submitting...' : 'Submit and Request'}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         </div>

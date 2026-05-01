@@ -3,6 +3,7 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
+//security and sanitization for the user input 
 import {
   normalizeLoginIdentifier,
   sanitizeLoginIdentifierInput,
@@ -14,7 +15,7 @@ const BuyerLogin: React.FC = () => {
   const { t } = useLanguage();
   const { login } = useAuth();
   const navigate = useNavigate();
-
+  // Local State: Tracks user input, error messages, password visibility, and loading status.
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -53,7 +54,7 @@ const BuyerLogin: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#F8F9FA] flex items-center justify-center p-4">
       <div className="w-full max-w-[400px] flex flex-col items-center">
-        
+
         {/* Logo/Icon */}
         <div className="bg-[#12B3D8] rounded-[20px] size-[72px] flex items-center justify-center shadow-lg shadow-[#12B3D8]/30 mb-8">
           <span className="material-symbols-outlined text-white text-[32px]">shopping_bag</span>
@@ -72,7 +73,7 @@ const BuyerLogin: React.FC = () => {
           <div className="space-y-2">
             <label className="text-[13px] font-semibold text-[#0F172A] block">{t('login.buyerIdLabel')}</label>
             <div className="relative">
-              <input 
+              <input
                 type="text"
                 required
                 className="w-full h-[52px] px-4 rounded-[12px] border border-[#E2E8F0] text-[#0F172A] font-medium placeholder:text-[#94A3B8] focus:border-[#12B3D8] focus:ring-1 focus:ring-[#12B3D8] outline-none transition-all pr-12"
@@ -93,7 +94,7 @@ const BuyerLogin: React.FC = () => {
           <div className="space-y-2">
             <label className="text-[13px] font-semibold text-[#0F172A] block">{t('login.password')}</label>
             <div className="relative">
-              <input 
+              <input
                 type={showPassword ? "text" : "password"}
                 required
                 className="w-full h-[52px] px-4 rounded-[12px] border border-[#E2E8F0] text-[#0F172A] font-medium placeholder:text-[#94A3B8] focus:border-[#12B3D8] focus:ring-1 focus:ring-[#12B3D8] outline-none transition-all tracking-widest pr-12"
@@ -104,7 +105,7 @@ const BuyerLogin: React.FC = () => {
                   if (error) setError('');
                 }}
               />
-              <button 
+              <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
                 className="absolute right-4 top-1/2 -translate-y-1/2 text-[#64748B] hover:text-[#0F172A] transition-colors"
@@ -129,7 +130,7 @@ const BuyerLogin: React.FC = () => {
             </button>
           </div>
 
-          <button 
+          <button
             type="submit"
             disabled={isLoading}
             className="w-full h-[56px] bg-[#12B3D8] hover:bg-[#0EA2C2] active:scale-[0.98] transition-all rounded-[12px] text-white font-bold text-[16px] shadow-lg shadow-[#12B3D8]/20 flex items-center justify-center gap-2 mt-4 disabled:opacity-70"
@@ -155,12 +156,12 @@ const BuyerLogin: React.FC = () => {
         </div>
 
         <div className="mt-8">
-            <Link to="/login" className="text-[#94A3B8] text-[13px] font-medium hover:text-[#0F172A] transition-colors flex items-center gap-2">
-                <span className="material-symbols-outlined text-[16px]">arrow_back</span>
-                {t('login.switch')}
-            </Link>
+          <Link to="/login" className="text-[#94A3B8] text-[13px] font-medium hover:text-[#0F172A] transition-colors flex items-center gap-2">
+            <span className="material-symbols-outlined text-[16px]">arrow_back</span>
+            {t('login.switch')}
+          </Link>
         </div>
-        
+
         <p className="mt-8 text-[#CBD5E1] text-[11px] font-medium">v4.2.0 • B2B Retail Intelligence</p>
       </div>
     </div>
